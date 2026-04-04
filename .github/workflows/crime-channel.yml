@@ -72,7 +72,7 @@ jobs:
           path: images/
       - run: mkdir -p temp
       - name: Build video
-        run: python make_video.py
+        run: python build_video.py
         env:
           LANG_CODE: ${{ matrix.lang }}
           VIDEO_TYPE: ${{ matrix.type }}
