@@ -1,4 +1,4 @@
-name: Crime Channel Autopilot
+name: Crime Auto
 
 on:
   schedule:
@@ -76,9 +76,6 @@ jobs:
         env:
           LANG_CODE: ${{ matrix.lang }}
           VIDEO_TYPE: ${{ matrix.type }}
-          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
-          COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       - name: Upload to YouTube
         run: python upload.py
         env:
