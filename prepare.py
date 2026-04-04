@@ -1,9 +1,7 @@
-import os, json, random, datetime, time, requests
+import os, json, random, datetime, time, re, requests
 from config import *
 
 # ─── LLM PROVIDER SYSTEM ─────────────────────────────────────
-# Tries Groq first (best free tier), then Cohere, then Gemini
-# Each provider tried with exponential backoff on rate limits
 
 def _groq_call(prompt, key):
     return requests.post(
@@ -52,67 +50,51 @@ def _gemini_parse(resp):
     return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 def build_providers():
-    """Build list of (name, call_fn, parse_fn) ordered by priority."""
     providers = []
-
-    # 1. Groq — best free tier: 30 RPM, 14400 RPD, no credit card
     groq_key = os.environ.get("GROQ_API_KEY", "")
     if groq_key:
         providers.append(("Groq-Llama3.3-70B",
                           lambda p: _groq_call(p, groq_key),
                           _groq_parse))
-
-    # 2. Cohere — good backup: 10 RPM trial, no credit card
     cohere_key = os.environ.get("COHERE_API_KEY", "")
     if cohere_key:
         providers.append(("Cohere-CommandR",
                           lambda p: _cohere_call(p, cohere_key),
                           _cohere_parse))
-
-    # 3. Gemini — last resort (your quota may be drained)
     gemini_key = os.environ.get("GEMINI_API_KEY", "")
     if gemini_key:
         for model in ["gemini-2.5-flash-preview-05-20", "gemini-2.0-flash", "gemini-1.5-flash"]:
             providers.append((f"Gemini-{model}",
                               lambda p, m=model: _gemini_call(p, gemini_key, m),
                               _gemini_parse))
-
     return providers
 
 def call_llm(prompt, retries=4):
-    """Try each provider with exponential backoff on rate limits."""
     providers = build_providers()
     if not providers:
         raise Exception(
-            "No API keys found! Add at least GROQ_API_KEY to your GitHub Secrets.\n"
-            "Get one free at https://console.groq.com (30 seconds, no credit card)"
+            "No API keys found! Add GROQ_API_KEY to GitHub Secrets.\n"
+            "Free at https://console.groq.com"
         )
-
     for name, call_fn, parse_fn in providers:
         for attempt in range(retries):
             try:
                 resp = call_fn(prompt)
-
                 if resp.status_code == 429:
                     wait = min(90, 15 * (2 ** attempt) + random.uniform(0, 5))
                     print(f"    Rate limited ({name}), waiting {wait:.0f}s...")
                     time.sleep(wait)
                     continue
-
                 resp.raise_for_status()
                 text = parse_fn(resp)
-
                 if not text or len(text) < 20:
                     raise Exception("Empty or too-short response")
-
                 print(f"    OK ({name})")
                 return text
-
             except requests.exceptions.Timeout:
                 print(f"    Timeout ({name}), retrying...")
                 time.sleep(10)
                 continue
-
             except Exception as e:
                 err = str(e)
                 if "429" in err or "quota" in err.lower() or "RESOURCE_EXHAUSTED" in err:
@@ -121,15 +103,52 @@ def call_llm(prompt, retries=4):
                     time.sleep(wait)
                     continue
                 elif "not found" in err.lower() or "does not exist" in err.lower():
-                    print(f"    Model unavailable ({name}), trying next provider...")
-                    break  # skip to next provider
+                    print(f"    Model unavailable ({name}), trying next...")
+                    break
                 else:
                     if attempt < retries - 1:
                         print(f"    Error: {err[:100]}")
                         time.sleep(5)
                     continue
+    raise Exception("All LLM providers failed")
 
-    raise Exception("All LLM providers failed after all retries")
+
+# ─── SAFE JSON PARSER ────────────────────────────────────────
+
+def safe_json_parse(text):
+    """Parse JSON from LLM output, handling control characters and code fences."""
+    # Strip code fences
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        text = text.rsplit("```", 1)[0]
+    text = text.strip()
+
+    # Remove control characters that break JSON (keep \n, \t, \r)
+    cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', text)
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        pass
+
+    # Try to extract JSON object from surrounding text
+    match = re.search(r'\{[\s\S]*\}', cleaned)
+    if match:
+        try:
+            inner = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f]', '', match.group())
+            return json.loads(inner)
+        except json.JSONDecodeError:
+            pass
+
+    # Last resort: fix common issues
+    try:
+        # Replace unescaped newlines inside strings
+        fixed = re.sub(r'(?<=": ")(.*?)(?="[,}])',
+                       lambda m: m.group(0).replace('\n', ' ').replace('\r', ''),
+                       cleaned)
+        return json.loads(fixed)
+    except json.JSONDecodeError:
+        raise Exception(f"Could not parse JSON from LLM output. First 200 chars: {text[:200]}")
 
 
 # ─── SCRIPT GENERATION ───────────────────────────────────────
@@ -139,7 +158,7 @@ def generate_script(case_type):
 Write a detailed narration script for a 20-minute video about a REAL criminal case in the category of "{case_type}".
 
 REQUIREMENTS:
-1. Script must be 2800-3800 words (about 20 minutes at natural pace)
+1. Script MUST be at least 3000 words. Count your words. If under 3000, keep writing more details. This is NON-NEGOTIABLE.
 2. Dramatic, suspenseful documentary tone like a Netflix true crime narrator
 3. Structure with these EXACT section markers:
    [HOOK] — 30 seconds, shocking opening line or question
@@ -150,14 +169,24 @@ REQUIREMENTS:
    [SUSPECTS] — 3 min, persons of interest and their stories
    [RESOLUTION] — 2 min, trial/verdict or current status of the case
    [CONCLUSION] — 1 min, aftermath, lasting impact, subscribe CTA
-4. Use vivid, cinematic language
+4. Use vivid, cinematic language — describe scenes, weather, emotions, locations in detail
 5. Include specific dates, locations, names from real public records
 6. Add [PAUSE] markers at natural dramatic pauses
 7. Add [SCENE CHANGE] between each major section
 8. Output ONLY the narration text, no stage directions
 9. Pick a specific, real, well-documented case. NOT fictional.
-10. Choose a case NOT extremely overcovered on YouTube."""
-    return call_llm(prompt, retries=5)
+10. Choose a case NOT extremely overcovered on YouTube
+11. To reach 3000+ words, elaborate extensively on each section — describe the location, the people involved, the timeline in extreme detail"""
+
+    for attempt in range(3):
+        text = call_llm(prompt, retries=5)
+        word_count = len(text.split())
+        if word_count >= 2500:
+            return text
+        print(f"    Script only {word_count} words, regenerating (attempt {attempt+2})...")
+        prompt += f"\n\nIMPORTANT: Your previous attempt was only {word_count} words. You MUST write at least 3000 words. Be much more detailed. Expand every section significantly."
+
+    return text  # return even if short, better than crashing
 
 def generate_short_script(title):
     prompt = f"""Write a 60-second YouTube Short script about a shocking true crime fact.
@@ -191,23 +220,31 @@ def generate_metadata(title, lang_code, lang_name, is_short=False):
     prompt = f"""Generate YouTube SEO metadata in {lang_name} for a true crime {kind}.
 Working title: {title}
 
-Output EXACTLY this JSON format (no other text):
-{{
-  "title": "clickworthy title under 70 chars",
-  "description": "SEO description with keywords, 2-3 paragraphs, include hashtags at end",
-  "tags": ["tag1", "tag2", "...up to 15 tags"]
-}}
+Output ONLY valid JSON with this exact structure, nothing else:
+{{"title": "clickworthy title under 70 chars", "description": "SEO description 2-3 paragraphs with hashtags at end", "tags": ["tag1", "tag2", "tag3", "tag4", "tag5"]}}
 
 Rules:
-- Title must be clickworthy but not clickbait
-- Description should include relevant keywords naturally
-- Tags mix broad and specific
-- All text in {lang_name}"""
-    result = call_llm(prompt)
-    if result.startswith("```"):
-        result = result.split("\n", 1)[1] if "\n" in result else result[3:]
-        result = result.rsplit("```", 1)[0]
-    return json.loads(result.strip())
+- Title must be clickworthy but not clickbait, under 70 characters
+- Description should include relevant keywords naturally, 2-3 paragraphs, hashtags at the end
+- Tags: exactly 5-15 tags mixing broad (true crime) and specific (case names, locations)
+- All text in {lang_name}
+- Output ONLY the JSON object, no markdown, no explanation, no code fences"""
+
+    for attempt in range(3):
+        result = call_llm(prompt)
+        try:
+            return safe_json_parse(result)
+        except Exception as e:
+            print(f"    JSON parse failed (attempt {attempt+1}): {str(e)[:80]}")
+            if attempt < 2:
+                time.sleep(2)
+
+    # Hardcoded fallback so the pipeline never crashes
+    return {
+        "title": title[:65] if len(title) > 65 else title,
+        "description": f"A shocking true crime case that will leave you speechless.\\n\\nSubscribe for more true crime content.\\n\\n#truecrime #mystery #crime",
+        "tags": ["true crime", "mystery", "crime", "documentary", "unsolved"]
+    }
 
 def extract_title(script):
     for line in script.split("\n"):
@@ -223,7 +260,6 @@ def main():
     os.makedirs(os.path.join(OUT, "scripts"), exist_ok=True)
     os.makedirs(os.path.join(OUT, "metadata"), exist_ok=True)
 
-    # Show which providers are available
     providers = build_providers()
     print(f"Available providers: {[p[0] for p in providers]}")
     if not providers:
@@ -231,7 +267,6 @@ def main():
         print("Add GROQ_API_KEY to GitHub Secrets: https://console.groq.com")
         raise SystemExit(1)
 
-    # Pick case category
     case_type = random.choice(CASE_CATEGORIES)
     print(f"Selected category: {case_type}")
 
@@ -239,8 +274,11 @@ def main():
     print("\n[1/2] Generating long script...")
     long_script = generate_script(case_type)
     working_title = extract_title(long_script)
+    wc = len(long_script.split())
     print(f"  Title: {working_title}")
-    print(f"  Words: {len(long_script.split())}")
+    print(f"  Words: {wc}")
+    if wc < 2000:
+        print(f"  WARNING: Script is under 2000 words. Video will be shorter than target.")
     with open(os.path.join(OUT, "scripts", "long_en.txt"), "w") as f:
         f.write(long_script)
 
@@ -251,7 +289,7 @@ def main():
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w") as f:
         f.write(short_script)
 
-    # Pick languages for this run (rotate daily)
+    # Pick languages for this run
     all_codes = list(LANGUAGES.keys())
     day_num = datetime.date.today().toordinal()
     start = day_num % len(all_codes)
@@ -260,7 +298,7 @@ def main():
         selected[0] = "en"
     print(f"\nLanguages this run: {[LANGUAGES[c]['name'] for c in selected]}")
 
-    # Step 3: Translate selected languages + metadata
+    # Step 3: Translate + metadata
     all_meta = {}
     total_tasks = len(selected) * 4
     task_num = 0
@@ -279,7 +317,6 @@ def main():
             all_meta[code] = {"long": long_meta, "short": short_meta}
             continue
 
-        # Translate long
         task_num += 1
         print(f"  [{task_num}/{total_tasks}] Translating long script...")
         try:
@@ -290,7 +327,6 @@ def main():
             print(f"  FAILED: {e}")
             continue
 
-        # Translate short
         task_num += 1
         print(f"  [{task_num}/{total_tasks}] Translating short script...")
         try:
@@ -301,7 +337,6 @@ def main():
             print(f"  FAILED: {e}")
             continue
 
-        # Long metadata
         task_num += 1
         print(f"  [{task_num}/{total_tasks}] Long metadata...")
         try:
@@ -310,7 +345,6 @@ def main():
             print(f"  FAILED: {e}")
             long_meta = {"title": working_title, "description": "", "tags": ["true crime"]}
 
-        # Short metadata
         task_num += 1
         print(f"  [{task_num}/{total_tasks}] Short metadata...")
         try:
@@ -322,12 +356,10 @@ def main():
         all_meta[code] = {"long": long_meta, "short": short_meta}
         print(f"  Done {info['name']}")
 
-        # Pause between languages to respect rate limits
         if code != selected[-1]:
             print("  Pausing 5s...")
             time.sleep(5)
 
-    # Save everything
     with open(os.path.join(OUT, "metadata", "all.json"), "w") as f:
         json.dump(all_meta, f, ensure_ascii=False, indent=2)
 
