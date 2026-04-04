@@ -1,46 +1,138 @@
-import os, json, random, datetime, time
-from google import genai
-from google.genai import types
+import os, json, random, datetime, time, requests
 from config import *
 
-# Model fallback chain — tries each until one works
-MODELS = [
-    "gemini-2.5-flash-preview-05-20",
-    "gemini-2.0-flash",
-    "gemini-1.5-flash",
-]
+# ─── LLM PROVIDER SYSTEM ─────────────────────────────────────
+# Tries Groq first (best free tier), then Cohere, then Gemini
+# Each provider tried with exponential backoff on rate limits
 
-def call_gemini(prompt, retries=5):
-    """Call Gemini with model fallback + exponential backoff."""
-    for model_name in MODELS:
+def _groq_call(prompt, key):
+    return requests.post(
+        "https://api.groq.com/openai/v1/chat/completions",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={
+            "model": "llama-3.3-70b-versatile",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 8192,
+            "temperature": 0.85
+        },
+        timeout=180
+    )
+
+def _groq_parse(resp):
+    return resp.json()["choices"][0]["message"]["content"].strip()
+
+def _cohere_call(prompt, key):
+    return requests.post(
+        "https://api.cohere.com/v2/chat",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={
+            "model": "command-r",
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 8192,
+            "temperature": 0.85
+        },
+        timeout=180
+    )
+
+def _cohere_parse(resp):
+    return resp.json()["message"]["content"][0]["text"].strip()
+
+def _gemini_call(prompt, key, model):
+    return requests.post(
+        f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent?key={key}",
+        headers={"Content-Type": "application/json"},
+        json={
+            "contents": [{"parts": [{"text": prompt}]}],
+            "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.85}
+        },
+        timeout=180
+    )
+
+def _gemini_parse(resp):
+    return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+def build_providers():
+    """Build list of (name, call_fn, parse_fn) ordered by priority."""
+    providers = []
+
+    # 1. Groq — best free tier: 30 RPM, 14400 RPD, no credit card
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if groq_key:
+        providers.append(("Groq-Llama3.3-70B",
+                          lambda p: _groq_call(p, groq_key),
+                          _groq_parse))
+
+    # 2. Cohere — good backup: 10 RPM trial, no credit card
+    cohere_key = os.environ.get("COHERE_API_KEY", "")
+    if cohere_key:
+        providers.append(("Cohere-CommandR",
+                          lambda p: _cohere_call(p, cohere_key),
+                          _cohere_parse))
+
+    # 3. Gemini — last resort (your quota may be drained)
+    gemini_key = os.environ.get("GEMINI_API_KEY", "")
+    if gemini_key:
+        for model in ["gemini-2.5-flash-preview-05-20", "gemini-2.0-flash", "gemini-1.5-flash"]:
+            providers.append((f"Gemini-{model}",
+                              lambda p, m=model: _gemini_call(p, gemini_key, m),
+                              _gemini_parse))
+
+    return providers
+
+def call_llm(prompt, retries=4):
+    """Try each provider with exponential backoff on rate limits."""
+    providers = build_providers()
+    if not providers:
+        raise Exception(
+            "No API keys found! Add at least GROQ_API_KEY to your GitHub Secrets.\n"
+            "Get one free at https://console.groq.com (30 seconds, no credit card)"
+        )
+
+    for name, call_fn, parse_fn in providers:
         for attempt in range(retries):
             try:
-                client = genai.Client(api_key=GEMINI_KEY)
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt
-                )
-                text = response.text.strip()
-                if not text:
-                    raise Exception("Empty response")
-                print(f"    OK ({model_name}, attempt {attempt+1})")
+                resp = call_fn(prompt)
+
+                if resp.status_code == 429:
+                    wait = min(90, 15 * (2 ** attempt) + random.uniform(0, 5))
+                    print(f"    Rate limited ({name}), waiting {wait:.0f}s...")
+                    time.sleep(wait)
+                    continue
+
+                resp.raise_for_status()
+                text = parse_fn(resp)
+
+                if not text or len(text) < 20:
+                    raise Exception("Empty or too-short response")
+
+                print(f"    OK ({name})")
                 return text
+
+            except requests.exceptions.Timeout:
+                print(f"    Timeout ({name}), retrying...")
+                time.sleep(10)
+                continue
+
             except Exception as e:
                 err = str(e)
-                if "RESOURCE_EXHAUSTED" in err or "429" in err or "quota" in err.lower():
-                    wait = min(60, 10 * (2 ** attempt) + random.uniform(0, 5))
-                    print(f"    Quota hit ({model_name}), waiting {wait:.0f}s...")
+                if "429" in err or "quota" in err.lower() or "RESOURCE_EXHAUSTED" in err:
+                    wait = min(90, 15 * (2 ** attempt))
+                    print(f"    Quota hit ({name}), waiting {wait:.0f}s...")
                     time.sleep(wait)
                     continue
                 elif "not found" in err.lower() or "does not exist" in err.lower():
-                    print(f"    Model {model_name} not available, trying next...")
-                    break
+                    print(f"    Model unavailable ({name}), trying next provider...")
+                    break  # skip to next provider
                 else:
-                    wait = 5 * (attempt + 1)
-                    print(f"    Error: {err[:80]}... retrying in {wait}s")
-                    time.sleep(wait)
+                    if attempt < retries - 1:
+                        print(f"    Error: {err[:100]}")
+                        time.sleep(5)
                     continue
-    raise Exception("All models failed after all retries")
+
+    raise Exception("All LLM providers failed after all retries")
+
+
+# ─── SCRIPT GENERATION ───────────────────────────────────────
 
 def generate_script(case_type):
     prompt = f"""You are an expert true crime scriptwriter for YouTube.
@@ -65,8 +157,7 @@ REQUIREMENTS:
 8. Output ONLY the narration text, no stage directions
 9. Pick a specific, real, well-documented case. NOT fictional.
 10. Choose a case NOT extremely overcovered on YouTube."""
-
-    return call_gemini(prompt)
+    return call_llm(prompt, retries=5)
 
 def generate_short_script(title):
     prompt = f"""Write a 60-second YouTube Short script about a shocking true crime fact.
@@ -79,8 +170,7 @@ REQUIREMENTS:
 - End with "Follow for the full story."
 - Include [PAUSE] markers for pacing
 - Narration only, dramatic urgent tone"""
-
-    return call_gemini(prompt)
+    return call_llm(prompt)
 
 def translate_script(script, lang_code, lang_name):
     prompt = f"""Translate the following YouTube true crime narration script to {lang_name}.
@@ -94,8 +184,7 @@ RULES:
 
 SCRIPT:
 {script}"""
-
-    return call_gemini(prompt)
+    return call_llm(prompt)
 
 def generate_metadata(title, lang_code, lang_name, is_short=False):
     kind = "YouTube Short" if is_short else "20-minute YouTube documentary"
@@ -114,9 +203,7 @@ Rules:
 - Description should include relevant keywords naturally
 - Tags mix broad and specific
 - All text in {lang_name}"""
-
-    result = call_gemini(prompt)
-    # Strip markdown code fences if present
+    result = call_llm(prompt)
     if result.startswith("```"):
         result = result.split("\n", 1)[1] if "\n" in result else result[3:]
         result = result.rsplit("```", 1)[0]
@@ -129,9 +216,20 @@ def extract_title(script):
             return clean[:100]
     return "True Crime Mystery"
 
+
+# ─── MAIN ────────────────────────────────────────────────────
+
 def main():
     os.makedirs(os.path.join(OUT, "scripts"), exist_ok=True)
     os.makedirs(os.path.join(OUT, "metadata"), exist_ok=True)
+
+    # Show which providers are available
+    providers = build_providers()
+    print(f"Available providers: {[p[0] for p in providers]}")
+    if not providers:
+        print("FATAL: No API keys configured!")
+        print("Add GROQ_API_KEY to GitHub Secrets: https://console.groq.com")
+        raise SystemExit(1)
 
     # Pick case category
     case_type = random.choice(CASE_CATEGORIES)
@@ -153,97 +251,92 @@ def main():
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w") as f:
         f.write(short_script)
 
-    # Determine which languages to process this run
+    # Pick languages for this run (rotate daily)
     all_codes = list(LANGUAGES.keys())
     day_num = datetime.date.today().toordinal()
     start = day_num % len(all_codes)
     selected = [all_codes[(start + i) % len(all_codes)] for i in range(LANGS_PER_RUN)]
-    # Always include English
     if "en" not in selected:
         selected[0] = "en"
+    print(f"\nLanguages this run: {[LANGUAGES[c]['name'] for c in selected]}")
 
-    print(f"\nSelected languages for this run: {[LANGUAGES[c]['name'] for c in selected]}")
-
-    # Step 3: Translate ONLY selected languages + generate metadata
+    # Step 3: Translate selected languages + metadata
     all_meta = {}
-    total_calls = len(selected) * 4  # 2 translations + 2 metadata per lang
-    call_num = 0
+    total_tasks = len(selected) * 4
+    task_num = 0
 
     for code in selected:
         info = LANGUAGES[code]
         print(f"\n--- {info['name']} ({code}) ---")
 
         if code == "en":
-            # English: just metadata, no translation needed
-            call_num += 1
-            print(f"  [{call_num}/{total_calls}] Long metadata...")
+            task_num += 1
+            print(f"  [{task_num}/{total_tasks}] Long metadata...")
             long_meta = generate_metadata(working_title, code, info["name"], False)
-            call_num += 1
-            print(f"  [{call_num}/{total_calls}] Short metadata...")
+            task_num += 1
+            print(f"  [{task_num}/{total_tasks}] Short metadata...")
             short_meta = generate_metadata(working_title, code, info["name"], True)
             all_meta[code] = {"long": long_meta, "short": short_meta}
             continue
 
-        # Translate long script
-        call_num += 1
-        print(f"  [{call_num}/{total_calls}] Translating long script...")
+        # Translate long
+        task_num += 1
+        print(f"  [{task_num}/{total_tasks}] Translating long script...")
         try:
             long_trans = translate_script(long_script, code, info["name"])
             with open(os.path.join(OUT, "scripts", f"long_{code}.txt"), "w") as f:
                 f.write(long_trans)
         except Exception as e:
-            print(f"  FAILED long translation: {e}")
+            print(f"  FAILED: {e}")
             continue
 
-        # Translate short script
-        call_num += 1
-        print(f"  [{call_num}/{total_calls}] Translating short script...")
+        # Translate short
+        task_num += 1
+        print(f"  [{task_num}/{total_tasks}] Translating short script...")
         try:
             short_trans = translate_script(short_script, code, info["name"])
             with open(os.path.join(OUT, "scripts", f"short_{code}.txt"), "w") as f:
                 f.write(short_trans)
         except Exception as e:
-            print(f"  FAILED short translation: {e}")
+            print(f"  FAILED: {e}")
             continue
 
         # Long metadata
-        call_num += 1
-        print(f"  [{call_num}/{total_calls}] Long metadata...")
+        task_num += 1
+        print(f"  [{task_num}/{total_tasks}] Long metadata...")
         try:
             long_meta = generate_metadata(working_title, code, info["name"], False)
         except Exception as e:
-            print(f"  FAILED long metadata: {e}")
+            print(f"  FAILED: {e}")
             long_meta = {"title": working_title, "description": "", "tags": ["true crime"]}
 
         # Short metadata
-        call_num += 1
-        print(f"  [{call_num}/{total_calls}] Short metadata...")
+        task_num += 1
+        print(f"  [{task_num}/{total_tasks}] Short metadata...")
         try:
             short_meta = generate_metadata(working_title, code, info["name"], True)
         except Exception as e:
-            print(f"  FAILED short metadata: {e}")
+            print(f"  FAILED: {e}")
             short_meta = {"title": working_title, "description": "", "tags": ["true crime", "shorts"]}
 
         all_meta[code] = {"long": long_meta, "short": short_meta}
         print(f"  Done {info['name']}")
 
-        # Pause between languages to avoid hitting rate limits
+        # Pause between languages to respect rate limits
         if code != selected[-1]:
-            print("  Pausing 8s between languages...")
-            time.sleep(8)
+            print("  Pausing 5s...")
+            time.sleep(5)
 
-    # Save all metadata
+    # Save everything
     with open(os.path.join(OUT, "metadata", "all.json"), "w") as f:
         json.dump(all_meta, f, ensure_ascii=False, indent=2)
 
-    # Save selected languages
     with open(os.path.join(OUT, "selected_languages.json"), "w") as f:
         json.dump(selected, f)
 
-    print(f"\n========================================")
-    print(f"COMPLETE — {len(all_meta)} languages ready")
-    print(f"Selected: {[LANGUAGES[c]['name'] for c in selected]}")
-    print(f"========================================")
+    print(f"\n{'='*45}")
+    print(f"DONE — {len(all_meta)} languages ready")
+    print(f"{'='*45}")
 
 if __name__ == "__main__":
     main()
