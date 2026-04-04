@@ -1,0 +1,98 @@
+name: Crime Channel Autopilot
+
+on:
+  schedule:
+    - cron: '0 14 * * *'   # Runs daily at 2 PM UTC (adjust your timezone)
+  workflow_dispatch:         # Manual trigger button
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      langs: ${{ steps.pick.outputs.langs }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install google-generativeai requests
+      - run: python prepare.py
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - id: pick
+        run: echo "langs=$(cat output/selected_languages.json)" >> $GITHUB_OUTPUT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: scripts-and-meta
+          path: output/
+
+  download-images:
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install Pillow requests
+      - run: python download_images.py
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: images
+          path: images/
+
+  build-and-upload:
+    runs-on: ubuntu-latest
+    needs: [prepare, download-images]
+    strategy:
+      matrix:
+        lang: ${{ fromJson(needs.prepare.outputs.langs) }}
+        type: [long, short]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      # Install system dependencies (FFmpeg + fonts)
+      - name: Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
+      - name: Install fonts
+        run: sudo apt-get install -y fonts-dejavu-core
+
+      # Install Python packages
+      - run: pip install edge-tts Pillow requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+
+      # Download shared artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: scripts-and-meta
+          path: output/
+      - uses: actions/download-artifact@v4
+        with:
+          name: images
+          path: images/
+
+      # Create temp directory
+      - run: mkdir -p temp
+
+      # Build video
+      - name: Build video
+        run: python make_video.py
+        env:
+          LANG_CODE: ${{ matrix.lang }}
+          VIDEO_TYPE: ${{ matrix.type }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+      # Upload to YouTube
+      - name: Upload to YouTube
+        run: python upload.py
+        env:
+          LANG_CODE: ${{ matrix.lang }}
+          VIDEO_TYPE: ${{ matrix.type }}
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
