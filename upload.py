@@ -38,7 +38,7 @@ def upload_video(video_path, thumb_path, title, description, tags, lang_code, is
             "defaultAudioLanguage": LANGUAGES[lang_code]["yt"],
         },
         "status": {
-            "privacyStatus": "private",
+            "privacyStatus": "public",
             "selfDeclaredMadeForKids": False,
             "embeddable": True,
             "publicStatsViewable": True,
