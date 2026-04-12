@@ -41,7 +41,6 @@ def _gemini_parse(r): return r.json()["candidates"][0]["content"]["parts"][0]["t
 
 def build_providers():
     p = []
-    # Cerebras first - free and fast
     k = os.environ.get("CEREBRAS_API_KEY", "")
     if k: p.append(("Cerebras", lambda pr: _cerebras_call(pr, k), _cerebras_parse))
     k = os.environ.get("GROQ_API_KEY", "")
@@ -50,9 +49,7 @@ def build_providers():
     if k: p.append(("Cohere", lambda pr: _cohere_call(pr, k), _cohere_parse))
     k = os.environ.get("GEMINI_API_KEY", "")
     if k:
-        # REMOVED: gemini-1.5-flash (deprecated/returns 404)
-        # ADDED: gemini-2.0-flash-lite, gemini-1.5-flash-8b
-        for m in ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]:
+        for m in ["gemini-2.0-flash", "gemini-2.0-flash-lite"]:
             p.append((f"Gemini-{m}", lambda pr, md=m: _gemini_call(pr, k, md), _gemini_parse))
     return p
 
@@ -61,34 +58,44 @@ def call_llm(prompt, retries=3):
         for a in range(retries):
             try:
                 r = cfn(prompt)
+                
+                # FIX: Instantly skip if API key is invalid (don't waste time retrying 401s)
+                if r.status_code == 401:
+                    print(f"    ❌ Invalid API Key ({name}), skipping provider!")
+                    break
+                    
                 if r.status_code == 429:
                     wait = min(120, 30 * (2 ** a) + random.uniform(0, 10))
                     print(f"    Rate limited ({name}), waiting {wait:.0f}s...")
                     time.sleep(wait)
                     continue
+                    
                 r.raise_for_status()
                 t = pfn(r)
                 if len(t) < 20: raise Exception("short response")
-                print(f"    OK ({name})")
+                print(f"    ✅ OK ({name})")
                 return t
+                
             except Exception as e:
                 err = str(e)
-                if "429" in err or "quota" in err.lower():
+                if "401" in err:
+                    print(f"    ❌ Invalid API Key ({name}), skipping provider!")
+                    break
+                elif "429" in err or "quota" in err.lower():
                     wait = min(120, 30 * (2 ** a))
                     print(f"    Quota ({name}), waiting {wait:.0f}s...")
                     time.sleep(wait)
                     continue
                 elif "not found" in err.lower() or "does not exist" in err.lower():
-                    print(f"    Unavailable ({name}), skipping")
+                    print(f"    ⚠️ Unavailable ({name}), skipping")
                     break
                 else:
-                    # FIX: Actually print the error and properly handle retries!
                     if a < retries - 1:
                         print(f"    Retry {a+1}/{retries} ({name}): {err[:100]}")
                         time.sleep(10)
                         continue
                     else:
-                        print(f"    Failed ({name}): {err[:100]}")
+                        print(f"    ❌ Failed ({name}): {err[:100]}")
                         break
     raise Exception("All LLM providers failed")
 
