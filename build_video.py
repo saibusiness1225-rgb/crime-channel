@@ -1,9 +1,9 @@
-import os, json, random, subprocess, asyncio, re
+import os, json, random, subprocess, asyncio, re, shutil
 import edge_tts
 from PIL import Image, ImageDraw, ImageFont, ImageFilter, ImageEnhance
 from config import *
 
-print("CRIME_BOT_V7")
+print("CRIME_BOT_V8_FIXED")
 
 VOICES = {
     "en": {"long": ["en-US-GuyNeural", "en-US-AndrewNeural", "en-US-BrianNeural"], "short": ["en-US-AriaNeural", "en-US-JennyNeural"]},
@@ -75,15 +75,43 @@ def clean_text(t):
 
 
 def vtt_to_srt(vp):
-    with open(vp, "r", encoding="utf-8") as f:
-        c = f.read()
-    c = re.sub(r'(\d{2}):(\d{2}):(\d{2})\.(\d{3})',
-               lambda m: f"{m.group(1)}:{m.group(2)}:{m.group(3)},{m.group(4)}",
-               c.replace("WEBVTT", "").strip())
-    sp = vp.replace(".vtt", ".srt")
-    with open(sp, "w", encoding="utf-8") as f:
-        f.write(c)
-    return sp
+    """Convert VTT to SRT format safely."""
+    try:
+        with open(vp, "r", encoding="utf-8") as f:
+            c = f.read()
+        # Remove WEBVTT header and any metadata
+        lines = c.split('\n')
+        srt_lines = []
+        idx = 1
+        i = 0
+        while i < len(lines):
+            line = lines[i].strip()
+            # Skip empty lines and WEBVTT header
+            if not line or line.startswith('WEBVTT') or line.startswith('Kind:') or line.startswith('Language:'):
+                i += 1
+                continue
+            # Check if this is a timestamp line
+            if '-->' in line:
+                # Format timestamp: 00:00:00.000 -> 00:00:00,000
+                line = line.replace('.', ',', 1)
+                srt_lines.append(str(idx))
+                srt_lines.append(line)
+                idx += 1
+                # Next line should be subtitle text
+                i += 1
+                while i < len(lines) and lines[i].strip():
+                    srt_lines.append(lines[i].strip())
+                    i += 1
+                srt_lines.append('')  # Blank line between entries
+                continue
+            i += 1
+        sp = vp.replace(".vtt", ".srt")
+        with open(sp, "w", encoding="utf-8") as f:
+            f.write('\n'.join(srt_lines))
+        return sp
+    except Exception as e:
+        print(f"    SRT conversion error: {e}")
+        return None
 
 
 def get_dur(p):
@@ -212,32 +240,6 @@ def slide_section(name, op, w, h, fonts, bg_img=None):
     img.save(op, quality=88)
 
 
-def slide_dramatic(text, op, w, h, fonts):
-    fb, fs, fl, fxl = fonts
-    img = dark_bg(w, h)
-    ov = Image.new("RGBA", (w, h), (0, 0, 0, 100))
-    img = Image.alpha_composite(img.convert("RGBA"), ov).convert("RGB")
-    d = ImageDraw.Draw(img)
-    lines, cur = [], ""
-    for word in text.split():
-        t = cur + " " + word if cur else word
-        if d.textlength(t, font=fl) <= w - 120:
-            cur = t
-        else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    sy = (h - len(lines) * 48) // 2
-    for i, l in enumerate(lines):
-        y = sy + i * 48
-        for dx, dy in [(-2, -2), (2, -2), (-2, 2), (2, 2)]:
-            d.text((60 + dx, y + dy), l, font=fl, fill=(0, 0, 0))
-        d.text((60, y), l, font=fl, fill=(230, 230, 240))
-    img.save(op, quality=88)
-
-
 def slide_sub(op, w, h, fonts):
     fb, fs, fl, fxl = fonts
     img = dark_bg(w, h)
@@ -288,14 +290,10 @@ def build_slides(timings, imgs, adur, short):
             continue
         rem = sd
         while rem > 2:
-            if ii < len(imgs):
-                slides.append(("cin", imgs[ii], min(slen, rem)))
-                ii += 1
-                rem -= min(slen, rem)
-            else:
-                slides.append(("cin", imgs[ii % max(1, len(imgs))], min(slen, rem)))
-                ii += 1
-                rem -= min(slen, rem)
+            img_idx = ii % max(1, len(imgs))
+            slides.append(("cin", imgs[img_idx], min(slen, rem)))
+            ii += 1
+            rem -= min(slen, rem)
     slides.append(("sub", "", 4.0))
     total = sum(s[2] for s in slides)
     if total > 0 and abs(total - adur) > 2:
@@ -304,24 +302,33 @@ def build_slides(timings, imgs, adur, short):
     return slides
 
 
-def render_video(imgs, ap, srt, op, short=False):
+def render_video(imgs, ap, srt_path, op, short=False):
+    """Render video with fixed subtitle handling."""
     w = SHORT_W if short else VIDEO_W
     h = SHORT_H if short else VIDEO_H
     adur = get_dur(ap)
     fonts = load_fonts(short)
     os.makedirs(TEMP, exist_ok=True)
+    
     lc = os.environ.get("LANG_CODE", "en")
     kind = "short" if short else "long"
     sp = os.path.join(OUT, "scripts", f"{kind}_{lc}.txt")
-    script = open(sp, "r", encoding="utf-8").read() if os.path.exists(sp) else ""
+    
+    script = ""
+    if os.path.exists(sp):
+        with open(sp, "r", encoding="utf-8") as f:
+            script = f.read()
+    
     if script:
         secs = parse_sections(script)
         timings = calc_times(secs, adur)
         print(f"    {len(secs)} sections")
     else:
         timings = [{"name": "MAIN", "start": 0, "duration": adur, "text": ""}]
+    
     slides = build_slides(timings, imgs, adur, short)
     print(f"    {len(slides)} slides")
+    
     print(f"    Rendering slides...")
     spaths = []
     for i, (st, data, dur) in enumerate(slides):
@@ -339,48 +346,81 @@ def render_video(imgs, ap, srt, op, short=False):
             else:
                 dark_bg(w, h).save(s, quality=88)
             spaths.append(s)
-        except Exception:
+        except Exception as e:
+            print(f"    Slide {i} error: {e}")
             dark_bg(w, h).save(s, quality=88)
             spaths.append(s)
+    
+    # Create concat file
     cl = os.path.join(TEMP, "slides.txt")
     with open(cl, "w") as f:
         for i, (_, _, dur) in enumerate(slides):
             f.write(f"file '{spaths[i]}'\nduration {dur:.3f}\n")
         f.write(f"file '{spaths[-1]}'\n")
+    
+    # Generate music
     mp = os.path.join(TEMP, "music.mp3")
     hm = gen_music(adur, mp)
+    
+    # Build FFmpeg command
     inputs = ["-f", "concat", "-safe", "0", "-i", cl, "-i", ap]
     if hm:
         inputs += ["-i", mp]
+    
     fs = 18 if short else 22
-    esc = srt.replace("\\", "/").replace("'", "'\\''").replace(":", "\\:").replace("[", "\\[").replace("]", "\\]")
-    if hm:
-        fc = (f"[0:v]fps=8,format=yuv420p,subtitles='{esc}':force_style="
+    has_subs = srt_path and os.path.exists(srt_path) and os.path.getsize(srt_path) > 50
+    
+    if has_subs and hm:
+        # Copy SRT to temp location with simple path (avoid escaping issues)
+        srt_temp = os.path.join(TEMP, "subs.srt")
+        shutil.copy2(srt_path, srt_temp)
+        # Use escaped path for FFmpeg (Windows-style for filter)
+        srt_escaped = srt_temp.replace("\\", "/").replace(":", "\\:")
+        fc = (f"[0:v]fps=8,format=yuv420p,subtitles='{srt_escaped}':force_style="
               f"'FontSize={fs},PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
               f"BackColour=&H80000000,Outline=2,Shadow=1,MarginV=35'[v];"
               f"[1:a][2:a]amix=inputs=2:duration=first:weights=1 0.3[a]")
-    else:
-        fc = (f"[0:v]fps=8,format=yuv420p,subtitles='{esc}':force_style="
+    elif has_subs:
+        srt_temp = os.path.join(TEMP, "subs.srt")
+        shutil.copy2(srt_path, srt_temp)
+        srt_escaped = srt_temp.replace("\\", "/").replace(":", "\\:")
+        fc = (f"[0:v]fps=8,format=yuv420p,subtitles='{srt_escaped}':force_style="
               f"'FontSize={fs},PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
               f"BackColour=&H80000000,Outline=2,Shadow=1,MarginV=35'[v];"
               f"[1:a]acopy[a]")
+    elif hm:
+        fc = (f"[0:v]fps=8,format=yuv420p[v];"
+              f"[1:a][2:a]amix=inputs=2:duration=first:weights=1 0.3[a]")
+    else:
+        fc = "[0:v]fps=8,format=yuv420p[v];[1:a]acopy[a]"
+    
     cmd = (["ffmpeg", "-y"] + inputs +
            ["-filter_complex", fc, "-map", "[v]", "-map", "[a]",
             "-c:v", CODEC, "-preset", "ultrafast", "-crf", "23",
             "-c:a", "aac", "-b:a", "192k",
             "-shortest", "-movflags", "+faststart", "-pix_fmt", "yuv420p", op])
+    
     print(f"    Encoding...")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+    
     if r.returncode != 0:
-        print(f"    Subtitle burn failed, trying without subs...")
-        cmd2 = ["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", cl, "-i", ap,
-                 "-map", "0:v", "-map", "1:a",
+        print(f"    First encode failed, trying without subs...")
+        # Fallback: no subtitles
+        if hm:
+            fc2 = "[0:v]fps=8,format=yuv420p[v];[1:a][2:a]amix=inputs=2:duration=first:weights=1 0.3[a]"
+        else:
+            fc2 = "[0:v]fps=8,format=yuv420p[v];[1:a]acopy[a]"
+        
+        cmd2 = (["ffmpeg", "-y"] + inputs +
+                ["-filter_complex", fc2, "-map", "[v]", "-map", "[a]",
                  "-c:v", CODEC, "-preset", "ultrafast", "-crf", "23",
                  "-c:a", "aac", "-b:a", "192k",
-                 "-shortest", "-movflags", "+faststart", "-pix_fmt", "yuv420p", op]
+                 "-shortest", "-movflags", "+faststart", "-pix_fmt", "yuv420p", op])
         r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=300)
         if r2.returncode != 0:
-            raise Exception(f"Encode failed: {r2.stderr[:200]}")
+            print(f"    Encode error: {r2.stderr[-300:]}")
+            raise Exception(f"Encode failed")
+    
     if os.path.exists(op):
         print(f"    Video: {os.path.getsize(op) / (1024 * 1024):.1f}MB ({adur:.0f}s)")
     else:
@@ -388,6 +428,7 @@ def render_video(imgs, ap, srt, op, short=False):
 
 
 def make_thumb(title, imgs, op, short=False):
+    """Fixed: Use actual title instead of generic text."""
     w = SHORT_W if short else 1280
     h = SHORT_H if short else 720
     bg = dark_bg(w, h)
@@ -404,8 +445,12 @@ def make_thumb(title, imgs, op, short=False):
     d.rectangle([0, by, w, by + 5], fill=(196, 30, 58))
     fonts = load_fonts(short)
     fb = fonts[0]
+    
+    # Use actual title (cleaned for thumbnail)
+    clean_title = title.replace('<', '').replace('>', '').replace('&', 'and')[:80]
+    
     lines, cur = [], ""
-    for word in title.split():
+    for word in clean_title.split():
         t = cur + " " + word if cur else word
         if d.textlength(t, font=fb) <= w - 80:
             cur = t
@@ -415,12 +460,14 @@ def make_thumb(title, imgs, op, short=False):
             cur = word
     if cur:
         lines.append(cur)
+    
     sy = (by - len(lines) * 64) // 2
     for i, l in enumerate(lines):
         y = sy + i * 64
         for dx, dy in [(-2, -2), (2, -2), (-2, 2), (2, 2)]:
             d.text((40 + dx, y + dy), l, font=fb, fill=(0, 0, 0))
         d.text((40, y), l, font=fb, fill=(255, 255, 255))
+    
     d.text((40, by + 22), "TRUE CRIME", font=fonts[1], fill=(196, 30, 58))
     bg.save(op, quality=95)
 
@@ -429,42 +476,74 @@ def process(lc, short=False):
     info = LANGUAGES[lc]
     kind = "short" if short else "long"
     sp = os.path.join(OUT, "scripts", f"{kind}_{lc}.txt")
+    
     if not os.path.exists(sp):
         print("  SKIP: no script")
         return None
-    raw = open(sp, "r", encoding="utf-8").read()
+    
+    with open(sp, "r", encoding="utf-8") as f:
+        raw = f.read()
+    
     clean = clean_text(raw)
     if len(re.sub(r'[^\w]', '', clean)) < 20:
         print("  SKIP: text too short")
         return None
+    
     print(f"Processing {info['name']} {kind} ({len(clean.split())} words)...")
+    
+    # Generate TTS
     ap = os.path.join(OUT, f"audio_{kind}_{lc}.mp3")
-    vp = os.path.join(OUT, f"subs_{kind}_{lc}.vtt")
-    ok = asyncio.run(gen_tts(clean, lc, kind, ap, vp))
+    vtt_path = os.path.join(OUT, f"subs_{kind}_{lc}.vtt")
+    
+    ok = asyncio.run(gen_tts(clean, lc, kind, ap, vtt_path))
     if not ok or not os.path.exists(ap) or os.path.getsize(ap) < 1000:
         print("  FAIL: TTS")
         return None
-    srt = vtt_to_srt(vp)
+    
+    # Convert VTT to SRT
+    srt_path = vtt_to_srt(vtt_path)
+    
+    # Get images
     ai = sorted([os.path.join(IMGS, f) for f in os.listdir(IMGS) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
     if not ai:
         print("  FAIL: no images")
         return None
+    
     ni = IMAGES_PER_SHORT if short else min(30, IMAGES_PER_VIDEO)
     imgs = random.sample(ai, min(ni, len(ai)))
-    vp2 = os.path.join(OUT, f"video_{kind}_{lc}.mp4")
+    
+    # Render video
+    vp = os.path.join(OUT, f"video_{kind}_{lc}.mp4")
     try:
-        render_video(imgs, ap, srt, vp2, short)
+        render_video(imgs, ap, srt_path, vp, short)
     except Exception as e:
         print(f"  FAIL: {e}")
         return None
-    if not os.path.exists(vp2):
+    
+    if not os.path.exists(vp):
         return None
+    
+    # Get title from metadata for thumbnail
+    mf = os.path.join(OUT, "metadata", "all.json")
+    thumb_title = f"{info['name']} Crime Story"  # Default
+    if os.path.exists(mf):
+        try:
+            with open(mf, "r", encoding="utf-8") as f:
+                am = json.load(f)
+            m = am.get(lc, {}).get("short" if short else "long", {})
+            if m and m.get("title"):
+                thumb_title = m["title"]
+        except Exception:
+            pass
+    
+    # Make thumbnail with actual title
     tp = os.path.join(OUT, f"thumb_{kind}_{lc}.jpg")
     try:
-        make_thumb(f"{info['name']} Crime Story", imgs, tp, short)
-    except Exception:
-        pass
-    return {"video": vp2, "thumbnail": tp, "lang": lc, "kind": kind}
+        make_thumb(thumb_title, imgs, tp, short)
+    except Exception as e:
+        print(f"  Thumbnail warning: {e}")
+    
+    return {"video": vp, "thumbnail": tp, "lang": lc, "kind": kind}
 
 
 def main():
