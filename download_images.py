@@ -16,7 +16,6 @@ def download_pexels_images(count):
                 timeout=15
             )
             if resp.status_code != 200:
-                # print(f"  Pexels API Error {resp.status_code}")
                 continue
             for photo in resp.json().get("photos", []):
                 img_url = photo["src"]["large"]
