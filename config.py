@@ -37,6 +37,7 @@ OUT  = os.path.join(WORK, "output")
 IMGS = os.path.join(WORK, "images")
 TEMP = os.path.join(WORK, "temp")
 
+
 GEMINI_KEY    = os.environ.get("GEMINI_API_KEY", "")
 PEXELS_KEY    = os.environ.get("PEXELS_API_KEY", "")
 YT_CLIENT_ID  = os.environ.get("YT_CLIENT_ID", "")
