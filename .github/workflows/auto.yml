@@ -1,35 +1,47 @@
 name: Crime Auto
 
 on:
+  # 3x DAILY: 6AM, 2PM, 10PM UTC
   schedule:
+    - cron: '0 6 * * *'
     - cron: '0 14 * * *'
+    - cron: '0 22 * * *'
   workflow_dispatch:
     inputs:
       force_langs:
-        description: 'Comma-separated lang codes (e.g., en,es,hi) or leave empty for auto'
+        description: 'Comma-separated lang codes (en,es,hi) or empty for auto'
         required: false
         default: ''
+      force_type:
+        description: 'Force video type: long, short, or both'
+        required: false
+        default: 'both'
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
     outputs:
       langs: ${{ steps.pick.outputs.langs }}
+      types: ${{ steps.config.outputs.types }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
       - run: pip install requests
-      - run: python prepare.py
+      - name: Generate scripts
+        run: python prepare.py
         env:
           CEREBRAS_API_KEY: ${{ secrets.CEREBRAS_API_KEY }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           COHERE_API_KEY: ${{ secrets.COHERE_API_KEY }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FORCE_LANGS: ${{ github.event.inputs.force_langs }}
+          FORCE_TYPE: ${{ github.event.inputs.force_type }}
       - id: pick
         run: echo "langs=$(cat output/selected_languages.json)" >> $GITHUB_OUTPUT
+      - id: config
+        run: echo "types=$(cat output/run_config.json)" >> $GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
           name: scripts-and-meta
@@ -58,8 +70,8 @@ jobs:
     strategy:
       matrix:
         lang: ${{ fromJson(needs.prepare.outputs.langs) }}
-        type: [long, short]
-      fail-fast: false  # Don't stop other jobs if one fails
+        type: ${{ fromJson(needs.prepare.outputs.types) }}
+      fail-fast: false
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -95,3 +107,81 @@ jobs:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+
+  analytics:
+    runs-on: ubuntu-latest
+    needs: [build-and-upload]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+      - uses: actions/download-artifact@v4
+        with:
+          name: scripts-and-meta
+          path: output/
+      - name: Run analytics
+        run: python analytics.py
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        continue-on-error: true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: analytics-data
+          path: analytics/
+          retention-days: 90
+
+  comment-reply:
+    runs-on: ubuntu-latest
+    needs: [build-and-upload]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+      - uses: actions/download-artifact@v4
+        with:
+          name: scripts-and-meta
+          path: output/
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: analytics-data
+          path: analytics/
+      - name: Reply to comments
+        run: python comment_reply.py
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        continue-on-error: true
+
+  ab-testing:
+    runs-on: ubuntu-latest
+    needs: [analytics]
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install requests google-auth google-auth-oauthlib google-auth-httplib2 google-api-python-client
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with:
+          name: analytics-data
+          path: analytics/
+      - name: Run A/B tests
+        run: python ab_testing.py
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        continue-on-error: true
