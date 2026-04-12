@@ -547,6 +547,8 @@ def process(lc, short=False):
 
 
 def main():
+    os.makedirs(OUT, exist_ok=True)
+    
     lc = os.environ.get("LANG_CODE", "en")
     iss = os.environ.get("VIDEO_TYPE", "long") == "short"
     r = process(lc, iss)
