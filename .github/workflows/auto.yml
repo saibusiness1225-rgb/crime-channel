@@ -28,7 +28,7 @@ jobs:
           cache: 'pip'
 
       - name: Install Dependencies
-        run: pip install -r req
+        run: pip install -r requirements.txt
 
       # CRITICAL FIX: We continue even if this script crashes.
       # This ensures the 'set-matrix' step below ALWAYS runs.
