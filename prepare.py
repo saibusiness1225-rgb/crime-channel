@@ -35,53 +35,40 @@ def _gemini_call(prompt, key, model):
               "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.85}}, timeout=180)
 def _gemini_parse(r): return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
-def _pollinations_call(prompt):
-    """ULTIMATE FALLBACK: 100% Free, No API Key, Unblocks GitHub IPs"""
-    return requests.post("https://text.pollinations.ai/openai/chat/completions",
-        headers={"Content-Type": "application/json"},
+def _pollinations_raw_call(prompt):
+    """BULLETPROOF FALLBACK: Returns raw text, zero JSON parsing errors possible"""
+    return requests.post("https://text.pollinations.ai/", 
         json={
-            "model": "mistral",  # Switched to Mistral (more stable than 'openai' on free tier)
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [{"role": "user", "content": prompt}], 
+            "model": "deepseek", # DeepSeek is highly stable on their free tier
             "seed": random.randint(1, 99999)
-        }, 
-        timeout=300)
+        }, timeout=300)
               
-def _pollinations_parse(r):
-    """Bulletproof parser for Pollinations response"""
-    try:
-        data = r.json()
-        # Standard OpenAI format
-        if "choices" in data and len(data["choices"]) > 0:
-            msg = data["choices"][0].get("message", {})
-            text = msg.get("content", "")
-            if text and len(text.strip()) > 20:
-                return text.strip()
-        # Alternate format fallbacks
-        if "text" in data and len(data["text"]) > 20:
-            return data["text"].strip()
-        if "content" in data and len(data["content"]) > 20:
-            return data["content"].strip()
-            
-        # If we got here, the response was empty or malformed
-        raise Exception(f"Empty or missing content in response")
-    except Exception as e:
-        raise Exception(f"Parse error: {str(e)}")
+def _pollinations_raw_parse(r):
+    """Simply read the text response. Impossible to fail."""
+    r.raise_for_status()
+    text = r.text.strip()
+    if len(text) < 20:
+        raise Exception("short response")
+    return text
 
 def build_providers():
     p = []
     
-    # Try paid/limited keys first (will likely be skipped due to GitHub IP blocks)
+    # Try standard keys first (will skip instantly if GitHub IPs are blocked)
     k = os.environ.get("CEREBRAS_API_KEY", "")
     if k: p.append(("Cerebras", lambda pr: _cerebras_call(pr, k), _cerebras_parse))
     k = os.environ.get("GROQ_API_KEY", "")
     if k: p.append(("Groq", lambda pr: _groq_call(pr, k), _groq_parse))
     k = os.environ.get("COHERE_API_KEY", "")
     if k: p.append(("Cohere", lambda pr: _cohere_call(pr, k), _cohere_parse))
-    k = os.environ.get("GEMINI_API_KEY", "")
-    if k: p.append(("Gemini-2.0-flash", lambda pr: _gemini_call(pr, k, "gemini-2.0-flash"), _gemini_parse))
     
-    # Always add free fallback last (Bypasses GitHub IP blocks)
-    p.append(("Pollinations-Free", lambda pr: _pollinations_call(pr), _pollinations_parse))
+    # Gemini (Usually works, just rate limited)
+    k = os.environ.get("GEMINI_API_KEY", "")
+    if k: p.append(("Gemini", lambda pr: _gemini_call(pr, k, "gemini-2.0-flash"), _gemini_parse))
+    
+    # Ultimate Fallback
+    p.append(("Pollinations-DeepSeek", lambda pr: _pollinations_raw_call(pr), _pollinations_raw_parse))
     
     return p
 
@@ -93,10 +80,11 @@ def call_llm(prompt, retries=3):
                 
                 if r.status_code == 401:
                     print(f"    ❌ Blocked/Invalid ({name})")
-                    break # Don't retry 401s, they are IP blocks or bad keys
+                    break # Skip entirely (GitHub IP block)
                     
                 if r.status_code == 429:
-                    wait = min(120, 30 * (2 ** a) + random.uniform(0, 10))
+                    # FIX: Wait up to 5 minutes for rate limits to clear
+                    wait = min(300, 60 * (a + 1) + random.uniform(0, 30))
                     print(f"    Rate limited ({name}), waiting {wait:.0f}s...")
                     time.sleep(wait)
                     continue
@@ -113,7 +101,7 @@ def call_llm(prompt, retries=3):
                     print(f"    ❌ Blocked/Invalid ({name})")
                     break
                 elif "429" in err or "quota" in err.lower():
-                    wait = min(120, 30 * (2 ** a))
+                    wait = min(300, 60 * (a + 1) + random.uniform(0, 30))
                     print(f"    Quota ({name}), waiting {wait:.0f}s...")
                     time.sleep(wait)
                     continue
@@ -123,7 +111,7 @@ def call_llm(prompt, retries=3):
                 else:
                     if a < retries - 1:
                         print(f"    Retry {a+1}/{retries} ({name}): {err[:80]}")
-                        time.sleep(10)
+                        time.sleep(15)
                         continue
                     else:
                         print(f"    ❌ Failed ({name}): {err[:80]}")
