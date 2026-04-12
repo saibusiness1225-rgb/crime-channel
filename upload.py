@@ -1,4 +1,4 @@
-import os, json
+import os, json, datetime
 import google.oauth2.credentials
 import googleapiclient.discovery
 import googleapiclient.http
@@ -7,7 +7,6 @@ from config import *
 
 
 def get_token():
-    """Fixed: Removed token_uri from data dict"""
     r = http_req.post("https://oauth2.googleapis.com/token", data={
         "client_id": YT_CLIENT_ID,
         "client_secret": YT_CLIENT_SEC,
@@ -20,55 +19,46 @@ def get_token():
 
 
 def get_yt_service():
-    """Get YouTube service with fresh token."""
     t = get_token()
     c = google.oauth2.credentials.Credentials(t)
     return googleapiclient.discovery.build("youtube", "v3", credentials=c)
 
 
-def find_or_create_playlist(yt, lang_code, lang_name):
-    """Find existing playlist for language or create new one."""
-    playlist_title = f"True Crime - {lang_name}"
+def find_or_create_playlist(yt, lang_code, lang_name, short=False):
+    playlist_title = f"{'Shorts - ' if short else ''}True Crime - {lang_name}"
     
-    # Search for existing playlist
     try:
         playlists = yt.playlists().list(
-            part="snippet",
-            mine=True,
-            maxResults=50
+            part="snippet", mine=True, maxResults=50
         ).execute()
         
         for pl in playlists.get("items", []):
             if pl["snippet"]["title"] == playlist_title:
-                print(f"  Found existing playlist: {playlist_title}")
+                print(f"  Found playlist: {playlist_title}")
                 return pl["id"]
     except Exception as e:
         print(f"  Playlist search warning: {str(e)[:60]}")
     
-    # Create new playlist
     try:
         result = yt.playlists().insert(
             part="snippet,status",
             body={
                 "snippet": {
                     "title": playlist_title,
-                    "description": f"True crime documentaries in {lang_name}. New cases added regularly.",
+                    "description": f"{'Short clips' if short else 'Full documentaries'} in {lang_name}.",
                     "defaultLanguage": LANGUAGES[lang_code]["yt"]
                 },
-                "status": {
-                    "privacyStatus": "public"
-                }
+                "status": {"privacyStatus": "public"}
             }
         ).execute()
         print(f"  Created playlist: {playlist_title}")
         return result["id"]
     except Exception as e:
-        print(f"  Playlist creation failed (non-fatal): {str(e)[:60]}")
+        print(f"  Playlist creation failed: {str(e)[:60]}")
         return None
 
 
 def add_to_playlist(yt, playlist_id, video_id):
-    """Add video to playlist."""
     if not playlist_id:
         return False
     try:
@@ -77,59 +67,68 @@ def add_to_playlist(yt, playlist_id, video_id):
             body={
                 "snippet": {
                     "playlistId": playlist_id,
-                    "resourceId": {
-                        "kind": "youtube#video",
-                        "videoId": video_id
-                    }
+                    "resourceId": {"kind": "youtube#video", "videoId": video_id}
                 }
             }
         ).execute()
         print(f"  Added to playlist")
         return True
     except Exception as e:
-        print(f"  Playlist add failed (non-fatal): {str(e)[:60]}")
+        print(f"  Playlist add failed: {str(e)[:60]}")
         return False
 
 
 def post_comment(yt, video_id, text):
-    """Post a pinned comment on the video."""
     if not text:
         return False
     try:
-        resource = {
-            "snippet": {
-                "videoId": video_id,
-                "topLevelComment": {
-                    "snippet": {
-                        "textOriginal": text
+        result = yt.commentThreads().insert(
+            part="snippet",
+            body={
+                "snippet": {
+                    "videoId": video_id,
+                    "topLevelComment": {
+                        "snippet": {"textOriginal": text}
                     }
                 }
             }
-        }
-        result = yt.commentThreads().insert(
-            part="snippet", body=resource
         ).execute()
         print(f"  Pinned comment posted")
         return True
     except Exception as e:
-        err = str(e)
-        if "comments" in err.lower() and "disabled" in err.lower():
-            print(f"  Comments disabled on video")
-        else:
-            print(f"  Comment failed (non-fatal): {err[:80]}")
-        print(f"  MANUALLY POST THIS COMMENT:")
-        print(f"  >>> {text}")
+        print(f"  Comment failed: {str(e)[:80]}")
+        print(f"  >>> POST MANUALLY: {text}")
         return False
 
 
-def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment=""):
-    """Upload video with playlist support."""
+def log_upload(video_id, lang_code, video_type, title, title_b=""):
+    """Log upload for analytics and A/B testing."""
+    os.makedirs(ANALYTICS, exist_ok=True)
+    log_file = os.path.join(ANALYTICS, "uploads.jsonl")
+    
+    entry = {
+        "video_id": video_id,
+        "lang": lang_code,
+        "type": video_type,
+        "title": title,
+        "title_b": title_b,
+        "uploaded_at": datetime.datetime.utcnow().isoformat(),
+        "ab_tested": False,
+        "views_at_upload": 0,
+    }
+    
+    with open(log_file, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+    
+    print(f"  Logged: {video_id}")
+
+
+def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="", title_b=""):
     yt = get_yt_service()
     
-    # Clean title
     ct = title.replace('<', '').replace('>', '').replace('&', 'and')[:100]
     
-    # Build description with timestamps for long videos
+    # Add timestamps if missing
     full_desc = desc
     if not short and "0:00" not in desc:
         timestamps = """
@@ -140,21 +139,21 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment=""):
 13:30 - The Suspects
 16:30 - The Resolution
 18:30 - Conclusion
+
 """
-        full_desc = timestamps + "\n" + desc
+        full_desc = timestamps + desc
     
-    # Add hashtags if missing
     if "#" not in full_desc:
         hashtags = "\n\n#TrueCrime #Mystery #Documentary #Crime #Unsolved"
         if not short:
-            hashtags += " #ColdCase #Investigation"
+            hashtags += " #ColdCase #Investigation #TrueCrimeDocumentary"
         full_desc += hashtags
     
     body = {
         "snippet": {
             "title": ct,
             "description": full_desc,
-            "tags": tags[:15] if tags else ["true crime", "mystery", "documentary"],
+            "tags": tags[:15] if tags else ["true crime", "mystery"],
             "categoryId": YT_CATEGORY,
             "defaultLanguage": LANGUAGES[lc]["yt"],
             "defaultAudioLanguage": LANGUAGES[lc]["yt"],
@@ -169,12 +168,10 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment=""):
 
     print(f"  Uploading: {ct[:60]}...")
     
-    # Upload with retry
-    max_retries = 3
-    for attempt in range(max_retries):
+    for attempt in range(3):
         try:
             req = yt.videos().insert(
-                part="snippet,status", 
+                part="snippet,status",
                 body=body,
                 media_body=googleapiclient.http.MediaFileUpload(vp, chunksize=-1, resumable=True)
             )
@@ -185,17 +182,15 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment=""):
             print(f"  Video ID: {vid}")
             break
         except Exception as e:
-            if attempt < max_retries - 1 and "quota" in str(e).lower():
-                print(f"  Upload retry {attempt + 1}/{max_retries}...")
+            if attempt < 2 and ("quota" in str(e).lower() or "5" in str(e)[:10]):
+                print(f"  Retry {attempt + 1}/3...")
                 import time
                 time.sleep(60)
-                yt = get_yt_service()  # Refresh token
+                yt = get_yt_service()
             else:
                 raise
-    else:
-        raise Exception("Upload failed after retries")
 
-    # Set thumbnail
+    # Thumbnail
     if tp and os.path.exists(tp):
         try:
             yt.thumbnails().set(
@@ -204,15 +199,17 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment=""):
             ).execute()
             print(f"  Thumbnail set")
         except Exception as e:
-            print(f"  Thumbnail failed (non-fatal): {str(e)[:60]}")
+            print(f"  Thumbnail warning: {str(e)[:60]}")
 
-    # Add to playlist (for long videos only)
-    if not short:
-        playlist_id = find_or_create_playlist(yt, lc, LANGUAGES[lc]["name"])
-        add_to_playlist(yt, playlist_id, vid)
+    # Playlist
+    playlist_id = find_or_create_playlist(yt, lc, LANGUAGES[lc]["name"], short)
+    add_to_playlist(yt, playlist_id, vid)
 
-    # Post pinned comment
+    # Pinned comment
     post_comment(yt, vid, pinned_comment)
+
+    # Log for analytics
+    log_upload(vid, lc, "short" if short else "long", ct, title_b)
 
     return vid
 
@@ -231,7 +228,7 @@ def main():
         r = json.load(f)
         
     if r.get("skip"):
-        print(f"SKIP: {lc} was skipped in build")
+        print(f"SKIP: {lc} was skipped")
         raise SystemExit(1)
         
     with open(mf) as f:
@@ -239,21 +236,20 @@ def main():
         
     m = am.get(lc, {}).get("short" if short else "long", {})
     if not m:
-        print(f"SKIP: no metadata for {lc} {'short' if short else 'long'}")
+        print(f"SKIP: no metadata for {lc}")
         raise SystemExit(1)
 
     try:
         vid = upload(
-            r["video"], 
-            r["thumbnail"],
+            r["video"], r["thumbnail"],
             m.get("title", "True Crime Mystery"),
             m.get("description", ""),
             m.get("tags", ["true crime"]),
-            lc, 
-            short,
-            m.get("pinned_comment", "")
+            lc, short,
+            m.get("pinned_comment", ""),
+            m.get("title_b", "")  # For A/B testing
         )
-        print(f"\n✅ SUCCESS: https://youtube.com/watch?v={vid}")
+        print(f"\n✅ https://youtube.com/watch?v={vid}")
     except Exception as e:
         print(f"\n❌ Upload failed: {e}")
         raise SystemExit(1)
