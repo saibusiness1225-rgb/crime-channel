@@ -11,7 +11,6 @@ def _cerebras_call(prompt, key):
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         json={"model": "llama-3.3-70b", "messages": [{"role": "user", "content": prompt}],
               "max_tokens": 8192, "temperature": 0.85}, timeout=180)
-
 def _cerebras_parse(r): return r.json()["choices"][0]["message"]["content"].strip()
 
 def _groq_call(prompt, key):
@@ -19,7 +18,6 @@ def _groq_call(prompt, key):
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         json={"model": "llama-3.3-70b-versatile", "messages": [{"role": "user", "content": prompt}],
               "max_tokens": 8192, "temperature": 0.85}, timeout=180)
-
 def _groq_parse(r): return r.json()["choices"][0]["message"]["content"].strip()
 
 def _cohere_call(prompt, key):
@@ -27,7 +25,6 @@ def _cohere_call(prompt, key):
         headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
         json={"model": "command-r", "messages": [{"role": "user", "content": prompt}],
               "max_tokens": 8192, "temperature": 0.85}, timeout=180)
-
 def _cohere_parse(r): return r.json()["message"]["content"][0]["text"].strip()
 
 def _gemini_call(prompt, key, model):
@@ -36,21 +33,41 @@ def _gemini_call(prompt, key, model):
         headers={"Content-Type": "application/json"},
         json={"contents": [{"parts": [{"text": prompt}]}],
               "generationConfig": {"maxOutputTokens": 8192, "temperature": 0.85}}, timeout=180)
-
 def _gemini_parse(r): return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+def _pollinations_call(prompt):
+    """FALLBACK: 100% Free, No API key required"""
+    return requests.post("https://text.pollinations.ai/openai",
+        headers={"Content-Type": "application/json"},
+        json={"model": "openai", "messages": [{"role": "user", "content": prompt}],
+              "max_tokens": 8192, "temperature": 0.85}, timeout=240)
+def _pollinations_parse(r): return r.json()["choices"][0]["message"]["content"].strip()
 
 def build_providers():
     p = []
+    
     k = os.environ.get("CEREBRAS_API_KEY", "")
-    if k: p.append(("Cerebras", lambda pr: _cerebras_call(pr, k), _cerebras_parse))
+    if k:
+        print(f"    [DEBUG] Cerebras key starts with: {k[:3]}...")
+        p.append(("Cerebras", lambda pr: _cerebras_call(pr, k), _cerebras_parse))
+        
     k = os.environ.get("GROQ_API_KEY", "")
-    if k: p.append(("Groq", lambda pr: _groq_call(pr, k), _groq_parse))
+    if k:
+        print(f"    [DEBUG] Groq key starts with: {k[:3]}...")
+        p.append(("Groq", lambda pr: _groq_call(pr, k), _groq_parse))
+        
     k = os.environ.get("COHERE_API_KEY", "")
-    if k: p.append(("Cohere", lambda pr: _cohere_call(pr, k), _cohere_parse))
+    if k:
+        print(f"    [DEBUG] Cohere key starts with: {k[:3]}...")
+        p.append(("Cohere", lambda pr: _cohere_call(pr, k), _cohere_parse))
+        
     k = os.environ.get("GEMINI_API_KEY", "")
     if k:
-        for m in ["gemini-2.0-flash", "gemini-2.0-flash-lite"]:
-            p.append((f"Gemini-{m}", lambda pr, md=m: _gemini_call(pr, k, md), _gemini_parse))
+        p.append(("Gemini-2.0-flash", lambda pr: _gemini_call(pr, k, "gemini-2.0-flash"), _gemini_parse))
+    
+    # ULTIMATE FALLBACK: Always add Pollinations (Free, No Key)
+    p.append(("Pollinations-Free", lambda pr: _pollinations_call(pr), _pollinations_parse))
+    
     return p
 
 def call_llm(prompt, retries=3):
@@ -59,9 +76,8 @@ def call_llm(prompt, retries=3):
             try:
                 r = cfn(prompt)
                 
-                # FIX: Instantly skip if API key is invalid (don't waste time retrying 401s)
                 if r.status_code == 401:
-                    print(f"    ❌ Invalid API Key ({name}), skipping provider!")
+                    print(f"    ❌ Invalid Key ({name}), skipping!")
                     break
                     
                 if r.status_code == 429:
@@ -79,7 +95,7 @@ def call_llm(prompt, retries=3):
             except Exception as e:
                 err = str(e)
                 if "401" in err:
-                    print(f"    ❌ Invalid API Key ({name}), skipping provider!")
+                    print(f"    ❌ Invalid Key ({name}), skipping!")
                     break
                 elif "429" in err or "quota" in err.lower():
                     wait = min(120, 30 * (2 ** a))
@@ -205,10 +221,7 @@ def main():
     os.makedirs(os.path.join(OUT, "scripts"), exist_ok=True)
     os.makedirs(os.path.join(OUT, "metadata"), exist_ok=True)
 
-    # Check for forced type
     force_type = os.environ.get("FORCE_TYPE", "both").lower()
-    
-    # Determine run config
     config = get_run_config()
     if force_type == "short":
         config["types"] = ["short"]
@@ -219,16 +232,13 @@ def main():
     print(f"Shorts only: {config['shorts_only']}")
     print(f"Types: {config['types']}")
     
-    # Save run config
     with open(os.path.join(OUT, "run_config.json"), "w") as f:
         json.dump(config["types"], f)
 
+    print("Loading providers...")
     provs = build_providers()
-    print(f"Providers: {[p[0] for p in provs]}")
-    if not provs:
-        raise SystemExit("No API keys! Add CEREBRAS_API_KEY or GROQ_API_KEY to GitHub Secrets.")
+    print(f"Active Providers: {[p[0] for p in provs]}")
 
-    # Pick category
     ct = random.choice(CASE_CATEGORIES)
     print(f"Category: {ct}")
 
@@ -246,7 +256,6 @@ def main():
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w") as f:
         f.write(ss)
 
-    # Select languages
     force_langs = os.environ.get("FORCE_LANGS", "")
     if force_langs:
         sel = [l.strip() for l in force_langs.split(",") if l.strip() in LANGUAGES]
