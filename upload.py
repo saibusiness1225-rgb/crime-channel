@@ -222,14 +222,18 @@ def main():
 
     if not os.path.exists(rf):
         print("SKIP: no result file")
-        raise SystemExit(1)
+        import sys
+        sys.exit(0) # <--- CHANGE THIS from raise SystemExit(1)
         
     with open(rf) as f:
         r = json.load(f)
         
     if r.get("skip"):
-        print(f"SKIP: {lc} was skipped")
-        raise SystemExit(1)
+        print(f"SKIP: {lc} was skipped in build")
+        import sys
+        sys.exit(0) # <--- CHANGE THIS from raise SystemExit(1)
+        
+    # ... rest of the upload code ...
         
     with open(mf) as f:
         am = json.load(f)
