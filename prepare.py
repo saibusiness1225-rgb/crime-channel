@@ -36,36 +36,32 @@ def _gemini_call(prompt, key, model):
 def _gemini_parse(r): return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
 
 def _pollinations_call(prompt):
-    """FALLBACK: 100% Free, No API key required"""
-    return requests.post("https://text.pollinations.ai/openai",
+    """ULTIMATE FALLBACK: 100% Free, No API Key, Unblocks GitHub IPs"""
+    return requests.post("https://text.pollinations.ai/openai/chat/completions",
         headers={"Content-Type": "application/json"},
         json={"model": "openai", "messages": [{"role": "user", "content": prompt}],
-              "max_tokens": 8192, "temperature": 0.85}, timeout=240)
-def _pollinations_parse(r): return r.json()["choices"][0]["message"]["content"].strip()
+              "max_tokens": 8192, "temperature": 0.85}, timeout=300)
+              
+def _pollinations_parse(r):
+    try:
+        return r.json()["choices"][0]["message"]["content"].strip()
+    except (KeyError, TypeError) as e:
+        raise Exception(f"Pollinations parsing error: {str(r.json())[:200]}")
 
 def build_providers():
     p = []
     
+    # Try paid/limited keys first (will likely be skipped due to GitHub IP blocks)
     k = os.environ.get("CEREBRAS_API_KEY", "")
-    if k:
-        print(f"    [DEBUG] Cerebras key starts with: {k[:3]}...")
-        p.append(("Cerebras", lambda pr: _cerebras_call(pr, k), _cerebras_parse))
-        
+    if k: p.append(("Cerebras", lambda pr: _cerebras_call(pr, k), _cerebras_parse))
     k = os.environ.get("GROQ_API_KEY", "")
-    if k:
-        print(f"    [DEBUG] Groq key starts with: {k[:3]}...")
-        p.append(("Groq", lambda pr: _groq_call(pr, k), _groq_parse))
-        
+    if k: p.append(("Groq", lambda pr: _groq_call(pr, k), _groq_parse))
     k = os.environ.get("COHERE_API_KEY", "")
-    if k:
-        print(f"    [DEBUG] Cohere key starts with: {k[:3]}...")
-        p.append(("Cohere", lambda pr: _cohere_call(pr, k), _cohere_parse))
-        
+    if k: p.append(("Cohere", lambda pr: _cohere_call(pr, k), _cohere_parse))
     k = os.environ.get("GEMINI_API_KEY", "")
-    if k:
-        p.append(("Gemini-2.0-flash", lambda pr: _gemini_call(pr, k, "gemini-2.0-flash"), _gemini_parse))
+    if k: p.append(("Gemini-2.0-flash", lambda pr: _gemini_call(pr, k, "gemini-2.0-flash"), _gemini_parse))
     
-    # ULTIMATE FALLBACK: Always add Pollinations (Free, No Key)
+    # Always add free fallback last (Bypasses GitHub IP blocks)
     p.append(("Pollinations-Free", lambda pr: _pollinations_call(pr), _pollinations_parse))
     
     return p
@@ -77,8 +73,8 @@ def call_llm(prompt, retries=3):
                 r = cfn(prompt)
                 
                 if r.status_code == 401:
-                    print(f"    ❌ Invalid Key ({name}), skipping!")
-                    break
+                    print(f"    ❌ Blocked/Invalid ({name})")
+                    break # Don't retry 401s, they are IP blocks or bad keys
                     
                 if r.status_code == 429:
                     wait = min(120, 30 * (2 ** a) + random.uniform(0, 10))
@@ -95,7 +91,7 @@ def call_llm(prompt, retries=3):
             except Exception as e:
                 err = str(e)
                 if "401" in err:
-                    print(f"    ❌ Invalid Key ({name}), skipping!")
+                    print(f"    ❌ Blocked/Invalid ({name})")
                     break
                 elif "429" in err or "quota" in err.lower():
                     wait = min(120, 30 * (2 ** a))
@@ -103,15 +99,15 @@ def call_llm(prompt, retries=3):
                     time.sleep(wait)
                     continue
                 elif "not found" in err.lower() or "does not exist" in err.lower():
-                    print(f"    ⚠️ Unavailable ({name}), skipping")
+                    print(f"    ⚠️ Unavailable ({name})")
                     break
                 else:
                     if a < retries - 1:
-                        print(f"    Retry {a+1}/{retries} ({name}): {err[:100]}")
+                        print(f"    Retry {a+1}/{retries} ({name}): {err[:80]}")
                         time.sleep(10)
                         continue
                     else:
-                        print(f"    ❌ Failed ({name}): {err[:100]}")
+                        print(f"    ❌ Failed ({name}): {err[:80]}")
                         break
     raise Exception("All LLM providers failed")
 
@@ -235,7 +231,6 @@ def main():
     with open(os.path.join(OUT, "run_config.json"), "w") as f:
         json.dump(config["types"], f)
 
-    print("Loading providers...")
     provs = build_providers()
     print(f"Active Providers: {[p[0] for p in provs]}")
 
