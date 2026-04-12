@@ -39,14 +39,33 @@ def _pollinations_call(prompt):
     """ULTIMATE FALLBACK: 100% Free, No API Key, Unblocks GitHub IPs"""
     return requests.post("https://text.pollinations.ai/openai/chat/completions",
         headers={"Content-Type": "application/json"},
-        json={"model": "openai", "messages": [{"role": "user", "content": prompt}],
-              "max_tokens": 8192, "temperature": 0.85}, timeout=300)
+        json={
+            "model": "mistral",  # Switched to Mistral (more stable than 'openai' on free tier)
+            "messages": [{"role": "user", "content": prompt}],
+            "seed": random.randint(1, 99999)
+        }, 
+        timeout=300)
               
 def _pollinations_parse(r):
+    """Bulletproof parser for Pollinations response"""
     try:
-        return r.json()["choices"][0]["message"]["content"].strip()
-    except (KeyError, TypeError) as e:
-        raise Exception(f"Pollinations parsing error: {str(r.json())[:200]}")
+        data = r.json()
+        # Standard OpenAI format
+        if "choices" in data and len(data["choices"]) > 0:
+            msg = data["choices"][0].get("message", {})
+            text = msg.get("content", "")
+            if text and len(text.strip()) > 20:
+                return text.strip()
+        # Alternate format fallbacks
+        if "text" in data and len(data["text"]) > 20:
+            return data["text"].strip()
+        if "content" in data and len(data["content"]) > 20:
+            return data["content"].strip()
+            
+        # If we got here, the response was empty or malformed
+        raise Exception(f"Empty or missing content in response")
+    except Exception as e:
+        raise Exception(f"Parse error: {str(e)}")
 
 def build_providers():
     p = []
