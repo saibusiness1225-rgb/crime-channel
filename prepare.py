@@ -50,7 +50,9 @@ def build_providers():
     if k: p.append(("Cohere", lambda pr: _cohere_call(pr, k), _cohere_parse))
     k = os.environ.get("GEMINI_API_KEY", "")
     if k:
-        for m in ["gemini-2.0-flash", "gemini-1.5-flash"]:
+        # REMOVED: gemini-1.5-flash (deprecated/returns 404)
+        # ADDED: gemini-2.0-flash-lite, gemini-1.5-flash-8b
+        for m in ["gemini-2.0-flash", "gemini-2.0-flash-lite", "gemini-1.5-flash-8b"]:
             p.append((f"Gemini-{m}", lambda pr, md=m: _gemini_call(pr, k, md), _gemini_parse))
     return p
 
@@ -80,7 +82,14 @@ def call_llm(prompt, retries=3):
                     print(f"    Unavailable ({name}), skipping")
                     break
                 else:
-                    if a < retries - 1: time.sleep(10)
+                    # FIX: Actually print the error and properly handle retries!
+                    if a < retries - 1:
+                        print(f"    Retry {a+1}/{retries} ({name}): {err[:100]}")
+                        time.sleep(10)
+                        continue
+                    else:
+                        print(f"    Failed ({name}): {err[:100]}")
+                        break
     raise Exception("All LLM providers failed")
 
 
@@ -212,7 +221,7 @@ def main():
     if not provs:
         raise SystemExit("No API keys! Add CEREBRAS_API_KEY or GROQ_API_KEY to GitHub Secrets.")
 
-    # Pick category (avoid recent ones if tracked)
+    # Pick category
     ct = random.choice(CASE_CATEGORIES)
     print(f"Category: {ct}")
 
@@ -239,7 +248,6 @@ def main():
     else:
         ac = list(LANGUAGES.keys())
         d = datetime.date.today().toordinal()
-        # Rotate through all languages over multiple runs
         sel = [ac[(d + i) % len(ac)] for i in range(LANGS_PER_RUN)]
         if "en" not in sel: sel[0] = "en"
     
