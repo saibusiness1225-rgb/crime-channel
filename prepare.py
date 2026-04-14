@@ -277,22 +277,68 @@ def main():
             print(f"  Comment: {lm.get('pinned_comment', '?')[:80]}...")
             continue
 
-        # Process Translations (with error handling)
-        try:
-            lt = translate(ls, code, info["name"])
+        # Process Translations (with resilient fallback)
+        long_ok = False
+        short_ok = False
+
+        # Try translating long script (3 attempts)
+        for attempt in range(3):
+            try:
+                lt = translate(ls, code, info["name"])
+                if lt and len(lt) > 100:
+                    with open(os.path.join(OUT, "scripts", f"long_{code}.txt"), "w", encoding="utf-8") as f:
+                        f.write(lt)
+                    long_ok = True
+                    break
+            except Exception as e:
+                print(f"  Long translation attempt {attempt+1} failed: {str(e)[:50]}")
+            time.sleep(2)
+
+        # Fallback: use English script if translation failed
+        if not long_ok:
+            print(f"  Translation failed for {code}, using English script with {info['name']} metadata")
             with open(os.path.join(OUT, "scripts", f"long_{code}.txt"), "w", encoding="utf-8") as f:
-                f.write(lt)
-            st = translate(ss, code, info["name"])
+                f.write(ls)  # Use English script as fallback
+            long_ok = True
+
+        # Try translating short script (3 attempts)
+        for attempt in range(3):
+            try:
+                st = translate(ss, code, info["name"])
+                if st and len(st) > 50:
+                    with open(os.path.join(OUT, "scripts", f"short_{code}.txt"), "w", encoding="utf-8") as f:
+                        f.write(st)
+                    short_ok = True
+                    break
+            except Exception as e:
+                print(f"  Short translation attempt {attempt+1} failed: {str(e)[:50]}")
+            time.sleep(2)
+
+        # Fallback: use English short script
+        if not short_ok:
             with open(os.path.join(OUT, "scripts", f"short_{code}.txt"), "w", encoding="utf-8") as f:
-                f.write(st)
+                f.write(ss)
+
+        # Always generate metadata (even if translation failed)
+        try:
             lm = gen_meta(wt, code, info["name"], False)
             sm = gen_meta(wt, code, info["name"], True)
-            am[code] = {"long": lm, "short": sm}
-            successful_langs.append(code)
-            print(f"  Title: {lm.get('title', '?')}")
-            print(f"  Comment: {lm.get('pinned_comment', '?')[:80]}...")
         except Exception as e:
-            print(f"  Skipping {code} (Error: {str(e)[:50]}...)")
+            print(f"  Metadata generation failed: {str(e)[:50]}, using defaults")
+            lm = {
+                "title": f"True Crime - {info['name']} | {wt[:40]}",
+                "title_b": f"{wt[:70]}",
+                "description": f"True crime documentary in {info['name']}. {wt}",
+                "tags": ["true crime", "mystery", "documentary", "crime"],
+                "pinned_comment": "What do you think happened? Comment below!",
+                "category": random.choice(CASE_CATEGORIES),
+            }
+            sm = lm.copy()
+
+        am[code] = {"long": lm, "short": sm}
+        successful_langs.append(code)
+        print(f"  Title: {lm.get('title', '?')}")
+        print(f"  Comment: {lm.get('pinned_comment', '?')[:80]}...")
         time.sleep(1)
 
     with open(os.path.join(OUT, "metadata", "all.json"), "w", encoding="utf-8") as f:
