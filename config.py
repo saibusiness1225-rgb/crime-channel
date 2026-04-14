@@ -93,7 +93,7 @@ SEO_KEYWORDS = {
     },
     "hi": {
         "broad": ["true crime hindi", "crime documentary hindi", "mystery hindi", "apraadh", "jahed"],
-        "niche":":["apraadh ki kahani", "suljhe apraadh", "rahasya", "investigation hindi"],
+        "niche": ["apraadh ki kahani", "suljhe apraadh", "rahasya", "investigation hindi"],
         "trending": ["truecrime", "mystery", "apraadh"],
     },
 }
