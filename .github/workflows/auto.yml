@@ -1,8 +1,12 @@
-name: Crime Auto
+name: Crime Auto - OPTIMIZED
 
 on:
   schedule:
-    - cron: '0 0 * * *'
+    # Multiple posting times throughout the day for maximum reach
+    - cron: '0 6 * * *'    # 6 AM UTC = 11:30 AM IST (Morning audience)
+    - cron: '0 12 * * *'   # 12 PM UTC = 5:30 PM IST (Afternoon audience)
+    - cron: '0 17 * * *'   # 5 PM UTC = 10:30 PM IST (Prime time)
+    - cron: '0 22 * * *'   # 10 PM UTC = 3:30 AM IST (Night owls / US audience)
   workflow_dispatch:
 
 permissions:
@@ -10,13 +14,13 @@ permissions:
 
 jobs:
   # ==========================================
-  # JOB 1: PREPARE (Bulletproof Version)
+  # JOB 1: PREPARE (Generate scripts + SEO metadata)
   # ==========================================
   prepare:
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
-    
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -30,20 +34,23 @@ jobs:
       - name: Install Dependencies
         run: pip install -r requirements.txt
 
-      # CRITICAL FIX: We continue even if this script crashes.
-      # This ensures the 'set-matrix' step below ALWAYS runs.
+      - name: Install FFmpeg & System Tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
+
       - name: Run Prepare Script
         id: run-prepare
         run: python prepare.py
         continue-on-error: true
 
-      # SAFETY NET: If the script failed, create dummy files so the next job doesn't fail downloading.
       - name: Create Safety Files
         run: |
           mkdir -p output/scripts
           mkdir -p output/metadata
-          
-          # If the main script didn't generate these, create dummies
+          mkdir -p output/analytics
+          mkdir -p analytics
+
           if [ ! -f output/selected_languages.json ]; then
             echo '["en"]' > output/selected_languages.json
           fi
@@ -51,18 +58,15 @@ jobs:
             echo "Test script content. The prepare script likely failed to generate the real one." > output/scripts/long_en.txt
           fi
           if [ ! -f output/metadata/all.json ]; then
-            echo '{"en":{"long":{"title":"Test","description":"","tags":[],"pinned_comment":""}}}' > output/metadata/all.json
+            echo '{"en":{"long":{"title":"True Crime Mystery","description":"","tags":[],"pinned_comment":"","category":"","title_b":""}}}' > output/metadata/all.json
           fi
-          
-          # Always create analytics data to satisfy other jobs
+
           echo '{"status":"prepared"}' > output/analytics-data.json
 
       - name: Set Matrix Output
         id: set-matrix
         run: |
-          # Read the list (which is now guaranteed to exist)
           LIST=$(cat output/selected_languages.json)
-          # Wrap in matrix format
           echo "matrix={\"code\":$LIST}" >> $GITHUB_OUTPUT
 
       - name: Upload Scripts & Metadata
@@ -78,15 +82,15 @@ jobs:
           path: output/analytics-data.json
 
   # ==========================================
-  # JOB 2: BUILD & UPLOAD
+  # JOB 2: BUILD VIDEO (High quality, no black screens)
   # ==========================================
-  build-and-upload:
+  build:
     needs: prepare
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
-      fail-fast: false 
-    
+      fail-fast: false
+
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -99,6 +103,12 @@ jobs:
 
       - name: Install Dependencies
         run: pip install -r requirements.txt
+
+      - name: Install FFmpeg & Fonts
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
+          pip install numpy
 
       - name: Download Scripts
         uses: actions/download-artifact@v4
@@ -114,7 +124,7 @@ jobs:
           VIDEO_TYPE: long
         run: python build.py
 
-      - name: Upload to YouTube
+      - name: Upload to YouTube (Scheduled)
         env:
           LANG_CODE: ${{ matrix.code }}
           VIDEO_TYPE: long
@@ -126,32 +136,75 @@ jobs:
         run: python upload.py
 
   # ==========================================
-  # JOBS 3 & 4: ANALYTICS
+  # JOB 3: COMMENT REPLY (Engagement booster)
   # ==========================================
   comment-reply:
-    needs: [prepare, build-and-upload]
+    needs: [prepare, build]
     runs-on: ubuntu-latest
-    if: success() 
-    steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-      - name: Download Analytics
-        uses: actions/download-artifact@v4
-        with:
-          name: analytics-data
-      - name: Run Reply Logic
-        run: echo "Reply logic running..."
+    if: always() && needs.build.result == 'success'
 
-  ab-testing:
-    needs: [prepare, build-and-upload]
-    runs-on: ubuntu-latest
-    if: success()
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
       - name: Download Analytics
         uses: actions/download-artifact@v4
         with:
           name: analytics-data
-      - name: Run AB Test Logic
-        run: echo "AB test logic running..."
+
+      - name: Run Comment Reply
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: python comment_reply.py
+
+  # ==========================================
+  # JOB 4: ANALYTICS & A/B TESTING
+  # ==========================================
+  analytics-and-ab:
+    needs: [prepare, build]
+    runs-on: ubuntu-latest
+    if: always() && needs.build.result == 'success'
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+          cache: 'pip'
+
+      - name: Install Dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download Analytics
+        uses: actions/download-artifact@v4
+        with:
+          name: analytics-data
+
+      - name: Run Analytics
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python analytics.py
+
+      - name: Run A/B Testing
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+        run: python ab_testing.py
