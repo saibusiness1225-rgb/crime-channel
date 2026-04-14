@@ -1,12 +1,238 @@
+"""
+Script Preparation - OPTIMIZED with SEO, Hashtags, and Engagement
+- Gemini AI for high-quality true crime scripts
+- SEO-optimized metadata (titles, descriptions, tags)
+- Engagement-optimized pinned comments
+- Smart hashtag generation
+- A/B test title variants
+- Multi-language support with proper translations
+"""
+import os, json, random, time, datetime, re
+import requests
+from config import *
+
+
+def build_providers():
+    """Build list of AI providers with fallbacks."""
+    providers = []
+    if GEMINI_KEY:
+        providers.append(("Gemini", call_gemini))
+    # Pollinations as free fallback
+    providers.append(("Pollinations", call_pollinations))
+    return providers
+
+
+def call_gemini(prompt, max_retries=2):
+    """Call Gemini API for script generation."""
+    for attempt in range(max_retries):
+        try:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "temperature": 0.9,
+                    "maxOutputTokens": 4096,
+                    "topP": 0.95,
+                }
+            }
+            r = requests.post(url, json=payload, timeout=120)
+            if r.status_code == 200:
+                text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
+                if len(text) > 200:
+                    return text
+            print(f"  Gemini attempt {attempt+1} failed: {r.status_code}")
+        except Exception as e:
+            print(f"  Gemini error: {str(e)[:60]}")
+        time.sleep(3)
+    return None
+
+
+def call_pollinations(prompt):
+    """Call Pollinations as free fallback."""
+    try:
+        url = "https://text.pollinations.ai/"
+        payload = {
+            "messages": [{"role": "user", "content": prompt}],
+            "model": "openai",
+            "seed": random.randint(1, 99999),
+        }
+        r = requests.post(url, json=payload, timeout=120)
+        if r.status_code == 200:
+            text = r.text
+            if len(text) > 200:
+                return text
+    except Exception as e:
+        print(f"  Pollinations error: {str(e)[:60]}")
+    return None
+
+
+def gen_script(category):
+    """Generate long-form true crime script with engagement hooks."""
+    prompt = f"""Write a compelling, factual true crime documentary script about: {category}
+
+REQUIREMENTS:
+- 2000-2500 words for a 15-20 minute video
+- Use EXACTLY these section markers: [HOOK] [INTRO] [BACKGROUND] [THE CRIME] [INVESTIGATION] [SUSPECTS] [RESOLUTION] [CONCLUSION]
+- [HOOK]: Start with a shocking fact or question that grabs attention in the first 10 seconds
+- [INTRO]: Introduce the case and setting
+- [BACKGROUND]: Provide historical and personal context
+- [THE CRIME]: Describe what happened in dramatic detail
+- [INVESTIGATION]: Detail the police investigation and evidence
+- [SUSPECTS]: Present the suspects and their motives
+- [RESOLUTION]: Explain how the case was resolved (or why it remains unsolved)
+- [CONCLUSION]: Reflect on the case's impact and lingering questions
+- Use [PAUSE] for dramatic pauses and [SCENE CHANGE] for visual transitions
+- Write in a documentary narration style - dramatic but factual
+- Include specific dates, locations, and names for authenticity
+- End each section with a hook that makes viewers want to keep watching
+
+The script should be engaging enough that viewers watch until the end."""
+    return gen_with_fallback(prompt)
+
+
+def gen_short(working_title):
+    """Generate short-form (YouTube Shorts) script optimized for comments."""
+    prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
+
+REQUIREMENTS:
+- 150-200 words
+- Start with a SHOCKING hook in the first 3 seconds
+- Use [HOOK] [THE CRIME] [CONCLUSION] section markers
+- End with a question that forces viewers to comment (comment bait)
+- Example ending: "What would YOU have done? Tell me in the comments."
+- Keep sentences short and punchy for TTS
+- Use dramatic pauses with [PAUSE]"""
+    return gen_with_fallback(prompt)
+
+
+def gen_with_fallback(prompt):
+    """Try each AI provider with fallback."""
+    providers = build_providers()
+    for name, fn in providers:
+        print(f"  Trying {name}...")
+        result = fn(prompt)
+        if result and len(result) > 100:
+            return result
+    return "Error: All AI providers failed."
+
+
+def extract_title(script):
+    """Extract or generate a compelling video title from the script."""
+    # Try to get a better title using AI
+    prompt = f"""Based on this true crime script, create a compelling YouTube video title.
+
+REQUIREMENTS:
+- Maximum 70 characters (for YouTube search optimization)
+- Use power words: SHOCKING, UNSEEN, HIDDEN, DARK, CHILLING, TERRIFYING
+- Include the case type (murder, disappearance, heist, etc.)
+- Make viewers WANT to click (but not clickbait)
+- Do NOT use quotes around the title
+- Just the title, nothing else
+
+Script excerpt:
+{script[:800]}"""
+    title = gen_with_fallback(prompt)
+    title = title.strip().strip('"').strip("'").strip()
+    if len(title) > 100:
+        title = title[:100]
+    return title
+
+
+def gen_meta(working_title, lang_code, lang_name, is_short):
+    """Generate SEO-optimized metadata for a video."""
+    kind = "Short" if is_short else "Long"
+    duration = "60-90 seconds" if is_short else "15-20 minutes"
+
+    prompt = f"""Generate YouTube video metadata for a true crime video in {lang_name}.
+
+Title: {working_title}
+Video type: {kind} ({duration})
+Language: {lang_name} ({lang_code})
+
+Generate EXACTLY this JSON format (no markdown, no extra text):
+{{
+  "title": "SEO-optimized title under 70 chars with power words",
+  "title_b": "Alternative title for A/B testing (different angle)",
+  "description": "200-300 word description that includes keywords naturally. Start with a hook sentence. Include a brief summary. End with a call to action.",
+  "tags": ["tag1", "tag2", "tag3", "tag4", "tag5", "tag6", "tag7", "tag8", "tag9", "tag10", "tag11", "tag12", "tag13", "tag14", "tag15", "tag16", "tag17", "tag18", "tag19", "tag20"],
+  "pinned_comment": "An engaging comment to pin that asks viewers a question and encourages discussion. Keep under 200 chars.",
+  "category": "{random.choice(CASE_CATEGORIES)}"
+}}
+
+Requirements:
+- Title must use power words for CTR (SHOCKING, DARK, HIDDEN, etc.)
+- title_b should test a different emotional angle
+- Description should naturally include keywords for SEO
+- Tags: mix of broad (true crime, mystery) and specific (case-specific) tags
+- Pinned comment should drive engagement (questions work best)
+- Write EVERYTHING in {lang_name}, not English"""
+
+    result = gen_with_fallback(prompt)
+    try:
+        # Try to extract JSON from response
+        json_match = re.search(r'\{[^{}]*\}', result, re.DOTALL)
+        if json_match:
+            meta = json.loads(json_match.group())
+        else:
+            meta = json.loads(result)
+
+        # Validate and fill missing fields
+        if "title" not in meta or not meta["title"]:
+            meta["title"] = working_title[:70]
+        if "title_b" not in meta or not meta["title_b"]:
+            meta["title_b"] = meta["title"]  # Same title as fallback
+        if "description" not in meta:
+            meta["description"] = ""
+        if "tags" not in meta or not meta["tags"]:
+            meta["tags"] = ["true crime", "mystery", "documentary"]
+        if "pinned_comment" not in meta:
+            meta["pinned_comment"] = ""
+        if "category" not in meta:
+            meta["category"] = random.choice(CASE_CATEGORIES)
+
+        return meta
+    except Exception as e:
+        print(f"  Meta parse error: {str(e)[:60]}")
+        return {
+            "title": working_title[:70],
+            "title_b": working_title[:70],
+            "description": f"True crime documentary: {working_title}",
+            "tags": ["true crime", "mystery", "documentary", "crime", "unsolved"],
+            "pinned_comment": f"What do you think really happened? Let us know in the comments.",
+            "category": random.choice(CASE_CATEGORIES),
+        }
+
+
+def translate(text, lang_code, lang_name):
+    """Translate script to target language using AI."""
+    prompt = f"""Translate the following true crime script to {lang_name} ({lang_code}).
+
+IMPORTANT:
+- Keep all section markers like [HOOK], [INTRO], [BACKGROUND], etc. unchanged
+- Keep [PAUSE] and [SCENE CHANGE] markers unchanged
+- Translate naturally, not word-for-word
+- Maintain the dramatic documentary tone
+- Use natural-sounding {lang_name} expressions
+
+Script to translate:
+{text[:3000]}"""
+
+    result = gen_with_fallback(prompt)
+    if result and len(result) > 50:
+        return result
+    return text  # Return original if translation fails
+
+
 def main():
     os.makedirs(os.path.join(OUT, "scripts"), exist_ok=True)
     os.makedirs(os.path.join(OUT, "metadata"), exist_ok=True)
+    os.makedirs(ANALYTICS, exist_ok=True)
 
     provs = build_providers()
     paid_provs = [p for p in provs if "Pollinations" not in p[0]]
-    
+
     if not paid_provs:
-        print("⚠️ WARNING: No PAID API keys found. Using FREE fallback (Pollinations).")
+        print("WARNING: No PAID API keys found. Using FREE fallback (Pollinations).")
         print("   Note: Translations may fail due to text length limits.")
 
     ct = random.choice(CASE_CATEGORIES)
@@ -17,19 +243,21 @@ def main():
     wt = extract_title(ls)
     print(f"  Title: {wt}")
     print(f"  Words: {len(ls.split())}")
-    with open(os.path.join(OUT, "scripts", "long_en.txt"), "w") as f:
+    with open(os.path.join(OUT, "scripts", "long_en.txt"), "w", encoding="utf-8") as f:
         f.write(ls)
 
     print("\n[2/2] Generating short script (comment-bait)...")
     ss = gen_short(wt)
     print(f"  Words: {len(ss.split())}")
-    with open(os.path.join(OUT, "scripts", "short_en.txt"), "w") as f:
+    with open(os.path.join(OUT, "scripts", "short_en.txt"), "w", encoding="utf-8") as f:
         f.write(ss)
 
+    # Select languages for this run
     ac = list(LANGUAGES.keys())
     d = datetime.date.today().toordinal()
     sel = [ac[(d + i) % len(ac)] for i in range(LANGS_PER_RUN)]
-    if "en" not in sel: sel[0] = "en"
+    if "en" not in sel:
+        sel[0] = "en"
     print(f"\nLanguages this run: {[LANGUAGES[c]['name'] for c in sel]}")
 
     am = {}
@@ -38,7 +266,7 @@ def main():
     for code in sel:
         info = LANGUAGES[code]
         print(f"\n--- {info['name']} ({code}) ---")
-        
+
         # Always process English (it's the source)
         if code == "en":
             lm = gen_meta(wt, code, info["name"], False)
@@ -48,37 +276,40 @@ def main():
             print(f"  Title: {lm.get('title', '?')}")
             print(f"  Comment: {lm.get('pinned_comment', '?')[:80]}...")
             continue
-        
+
         # Process Translations (with error handling)
         try:
             lt = translate(ls, code, info["name"])
-            with open(os.path.join(OUT, "scripts", f"long_{code}.txt"), "w") as f:
+            with open(os.path.join(OUT, "scripts", f"long_{code}.txt"), "w", encoding="utf-8") as f:
                 f.write(lt)
             st = translate(ss, code, info["name"])
-            with open(os.path.join(OUT, "scripts", f"short_{code}.txt"), "w") as f:
+            with open(os.path.join(OUT, "scripts", f"short_{code}.txt"), "w", encoding="utf-8") as f:
                 f.write(st)
             lm = gen_meta(wt, code, info["name"], False)
             sm = gen_meta(wt, code, info["name"], True)
             am[code] = {"long": lm, "short": sm}
-            successful_langs.append(code) # Only add if successful
+            successful_langs.append(code)
             print(f"  Title: {lm.get('title', '?')}")
             print(f"  Comment: {lm.get('pinned_comment', '?')[:80]}...")
         except Exception as e:
-            print(f"  ⚠️ Skipping {code} (Error: {str(e)[:50]}...)")
+            print(f"  Skipping {code} (Error: {str(e)[:50]}...)")
         time.sleep(1)
 
-    with open(os.path.join(OUT, "metadata", "all.json"), "w") as f:
+    with open(os.path.join(OUT, "metadata", "all.json"), "w", encoding="utf-8") as f:
         json.dump(am, f, ensure_ascii=False, indent=2)
-    
-    # FIX: Only save languages that actually succeeded
-    # If everything failed except English, ensure English is in the list
+
+    # Ensure at least English is in the list
     if not successful_langs:
         successful_langs = ["en"]
-    
+
     with open(os.path.join(OUT, "selected_languages.json"), "w") as f:
         json.dump(successful_langs, f)
 
     print(f"\n{'=' * 50}")
-    print(f"DONE — {len(am)} languages with SEO + engagement")
+    print(f"DONE - {len(am)} languages with SEO + engagement")
     print(f"Final Build List: {successful_langs}")
     print(f"{'=' * 50}")
+
+
+if __name__ == "__main__":
+    main()
