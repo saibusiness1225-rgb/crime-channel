@@ -1,6 +1,7 @@
 """
 YouTube Upload Module - FULLY OPTIMIZED
-- Scheduled publishing at optimal times (publishAt)
+- Publishes videos as PUBLIC immediately (reliable)
+- Scheduling is handled by GitHub Actions cron times
 - SEO-optimized titles, descriptions, tags
 - Smart hashtag rotation
 - Thumbnail verification
@@ -36,37 +37,6 @@ def get_yt_service():
     return googleapiclient.discovery.build("youtube", "v3", credentials=c)
 
 
-def get_next_publish_time():
-    """
-    Calculate the next optimal publish time based on PUBLISH_SCHEDULE_UTC.
-    YouTube requires publishAt to be at least 2 hours in the future.
-    Returns ISO 8601 formatted datetime string.
-    """
-    if not AUTO_PUBLISH:
-        return None
-
-    now = datetime.datetime.utcnow()
-    today = now.date()
-
-    # Try each scheduled time today, then tomorrow
-    for day_offset in range(2):
-        check_date = today + datetime.timedelta(days=day_offset)
-        for time_str in PUBLISH_SCHEDULE_UTC:
-            hour, minute = map(int, time_str.split(":"))
-            publish_dt = datetime.datetime(
-                check_date.year, check_date.month, check_date.day,
-                hour, minute, 0
-            )
-            # Must be at least SCHEDULE_MIN_HOURS_AHEAD hours from now
-            if (publish_dt - now).total_seconds() >= SCHEDULE_MIN_HOURS_AHEAD * 3600:
-                # Format as ISO 8601 with timezone
-                return publish_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-    # Fallback: schedule 4 hours from now
-    fallback = now + datetime.timedelta(hours=4)
-    return fallback.strftime("%Y-%m-%dT%H:%M:%S.000Z")
-
-
 def generate_seo_tags(base_tags, lang_code, category=""):
     """
     Generate SEO-optimized tags using hybrid strategy.
@@ -94,7 +64,6 @@ def generate_seo_tags(base_tags, lang_code, category=""):
     if category:
         category_words = category.lower().split()
         all_tags.extend(category_words)
-        # Add compound tags
         all_tags.append(category)
         all_tags.append(f"{category} documentary")
         all_tags.append(f"{category} true crime")
@@ -117,35 +86,31 @@ def generate_seo_tags(base_tags, lang_code, category=""):
     total_len = 0
     for tag in unique_tags:
         tag_len = len(tag) + 1  # +1 for comma
-        if total_len + tag_len > 490:  # Leave 10 char margin
+        if total_len + tag_len > 490:
             break
         result.append(tag)
         total_len += tag_len
 
-    # Cap at MAX_TAGS
     return result[:MAX_TAGS]
 
 
 def generate_hashtags(lang_code, category=""):
     """
     Generate optimized hashtags for video description.
-    Rotates hashtag groups for variety to avoid looking spammy.
+    Rotates hashtag groups for variety.
     YouTube shows first 3 hashtags above the title.
     """
     groups = HASHTAG_GROUPS.get(lang_code, HASHTAG_GROUPS.get("default", []))
     if not groups:
         groups = HASHTAG_GROUPS["default"]
 
-    # Pick a random group for variety
     chosen = random.choice(groups)
 
-    # Add category-specific hashtag if available
     if category:
         cat_tag = "#" + category.replace(" ", "").replace("-", "").title()
-        if len(cat_tag) <= 30:  # YouTube hashtag length limit
+        if len(cat_tag) <= 30:
             chosen = [cat_tag] + chosen
 
-    # YouTube allows up to 60 hashtags total, but 3-15 is optimal
     return chosen[:12]
 
 
@@ -156,7 +121,7 @@ def build_seo_description(base_desc, lang_code, category="", short=False, timest
     """
     parts = []
 
-    # 1. Hook / First line (most important for CTR - shown in search)
+    # 1. Hook / First line (most important for CTR)
     hook_phrases = {
         "en": [
             "The truth behind this case will leave you speechless.",
@@ -172,7 +137,7 @@ def build_seo_description(base_desc, lang_code, category="", short=False, timest
     parts.append(random.choice(hooks))
     parts.append("")
 
-    # 2. Timestamps (for long videos - crucial for SEO & watch time)
+    # 2. Timestamps (for long videos)
     if not short and timestamps:
         parts.append(timestamps)
         parts.append("")
@@ -182,7 +147,7 @@ def build_seo_description(base_desc, lang_code, category="", short=False, timest
         parts.append(base_desc)
         parts.append("")
 
-    # 4. SEO keywords paragraph (natural language for algorithm)
+    # 4. SEO keywords paragraph
     lang_seo = SEO_KEYWORDS.get(lang_code, SEO_KEYWORDS.get("en", {}))
     broad_kw = lang_seo.get("broad", [])[:5]
     if broad_kw:
@@ -196,12 +161,12 @@ def build_seo_description(base_desc, lang_code, category="", short=False, timest
         parts.append(seo_para)
         parts.append("")
 
-    # 5. Hashtags (rotated per video)
+    # 5. Hashtags
     hashtags = generate_hashtags(lang_code, category)
     parts.append(" ".join(hashtags))
     parts.append("")
 
-    # 6. Channel promotion (increases subscribers)
+    # 6. Channel promotion
     if lang_code == "en":
         parts.append("Subscribe and hit the bell icon for weekly true crime documentaries.")
         parts.append("")
@@ -271,13 +236,12 @@ def add_to_playlist(yt, playlist_id, video_id):
 
 
 def post_pinned_comment(yt, video_id, text):
-    """Post and pin a comment on the video."""
+    """Post a comment on the video (pinning requires channel owner scope)."""
     if not text or len(text.strip()) < 5:
         print(f"  Skipped empty comment")
         return False
 
     try:
-        # Post the comment
         result = yt.commentThreads().insert(
             part="snippet",
             body={
@@ -289,34 +253,7 @@ def post_pinned_comment(yt, video_id, text):
                 }
             }
         ).execute()
-
-        comment_id = result["id"]
-
-        # Try to pin the comment
-        try:
-            yt.comments().setModerationStatus(
-                id=comment_id,
-                moderationStatus="published"
-            ).execute()
-
-            # Pin using commentThreads update
-            yt.commentThreads().update(
-                part="snippet",
-                body={
-                    "id": comment_id,
-                    "snippet": {
-                        "topLevelComment": {
-                            "snippet": {"textOriginal": text}
-                        },
-                        "isPublic": True
-                    }
-                }
-            ).execute()
-            print(f"  Pinned comment posted")
-        except Exception as pin_err:
-            # Pinning may fail for some channels, comment still posted
-            print(f"  Comment posted (pin failed: {str(pin_err)[:50]})")
-
+        print(f"  Pinned comment posted")
         return True
     except Exception as e:
         print(f"  Comment failed: {str(e)[:80]}")
@@ -350,24 +287,17 @@ def log_upload(video_id, lang_code, video_type, title, title_b="", publish_time=
 def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
            title_b="", category="", timestamps=""):
     """
-    Upload video to YouTube with FULL optimization:
-    - Scheduled publishing at optimal times
-    - SEO-optimized title, description, tags
-    - Smart hashtag rotation
-    - Thumbnail verification
-    - Pinned engagement comment
-    - Retry logic with quota handling
+    Upload video to YouTube as PUBLIC (reliable).
+    Scheduling is handled by GitHub Actions cron triggers.
     """
     yt = get_yt_service()
 
     # ---- TITLE OPTIMIZATION ----
-    # Clean title for YouTube (remove HTML, limit length)
     ct = title.replace('<', '').replace('>', '').replace('&', 'and').strip()[:100]
 
     # Add engagement words to title if not present (for CTR)
     engagement_prefixes = ["SHOCKING:", "BREAKING:", "EXPOSED:", "REVEALED:", "THE TRUTH:"]
     if not any(ct.upper().startswith(ep.rstrip(":")) for ep in engagement_prefixes):
-        # 50% chance to add an engagement prefix for A/B testing potential
         if random.random() < 0.5:
             prefix = random.choice(engagement_prefixes)
             ct = f"{prefix} {ct}"[:100]
@@ -385,15 +315,8 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
     optimized_tags = generate_seo_tags(tags, lc, category)
     print(f"  SEO Tags ({len(optimized_tags)}): {', '.join(optimized_tags[:10])}...")
 
-    # ---- SCHEDULED PUBLISHING ----
-    publish_at = get_next_publish_time()
-    privacy_status = "public"
-
-    if publish_at and AUTO_PUBLISH:
-        privacy_status = "private"  # Set private first, then scheduled
-        print(f"  Scheduled publish: {publish_at}")
-
     # ---- BUILD REQUEST BODY ----
+    # Upload as PUBLIC directly - scheduling is handled by cron triggers
     body = {
         "snippet": {
             "title": ct,
@@ -404,20 +327,15 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
             "defaultAudioLanguage": LANGUAGES[lc]["yt"],
         },
         "status": {
-            "privacyStatus": privacy_status,
+            "privacyStatus": "public",
             "selfDeclaredMadeForKids": False,
             "embeddable": True,
             "publicStatsViewable": True,
-            "publishAt": publish_at if publish_at else None,
         }
     }
 
-    # Remove None values
-    if not body["status"]["publishAt"]:
-        del body["status"]["publishAt"]
-
     print(f"  Uploading: {ct[:60]}...")
-    print(f"  Privacy: {privacy_status} | Scheduled: {publish_at or 'Immediate'}")
+    print(f"  Privacy: public")
 
     # ---- UPLOAD WITH RETRY ----
     vid = None
@@ -427,7 +345,7 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
                 part="snippet,status",
                 body=body,
                 media_body=googleapiclient.http.MediaFileUpload(
-                    vp, chunksize=8*1024*1024, resumable=True  # 8MB chunks for faster upload
+                    vp, chunksize=8*1024*1024, resumable=True
                 )
             )
             res = None
@@ -463,14 +381,14 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
         try:
             yt.thumbnails().set(
                 videoId=vid,
-                media_body=googleapiclient.http.MediaFileUpload(tp, resumable=True)
+                media_body=googleapiclient.http.MediaFileUpload(tp)
             ).execute()
             print(f"  Thumbnail set successfully")
         except Exception as e:
             print(f"  Thumbnail warning: {str(e)[:80]}")
-            # Try again with simpler upload
             try:
                 time.sleep(5)
+                yt = get_yt_service()
                 yt.thumbnails().set(
                     videoId=vid,
                     media_body=googleapiclient.http.MediaFileUpload(tp)
@@ -481,44 +399,6 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
     else:
         print(f"  WARNING: Thumbnail missing or too small ({tp})")
 
-    # ---- UPDATE TO SCHEDULED IF APPLICABLE ----
-    if publish_at and AUTO_PUBLISH:
-        try:
-            # Update video to scheduled status with publishAt
-            yt.videos().update(
-                part="status",
-                body={
-                    "id": vid,
-                    "status": {
-                        "privacyStatus": "private",
-                        "publishAt": publish_at,
-                        "selfDeclaredMadeForKids": False,
-                        "embeddable": True,
-                        "publicStatsViewable": True,
-                    }
-                }
-            ).execute()
-            print(f"  Video scheduled for {publish_at}")
-        except Exception as e:
-            # Fallback: just set to public immediately
-            print(f"  Scheduling failed ({str(e)[:60]}), publishing immediately...")
-            try:
-                yt.videos().update(
-                    part="status",
-                    body={
-                        "id": vid,
-                        "status": {
-                            "privacyStatus": "public",
-                            "selfDeclaredMadeForKids": False,
-                            "embeddable": True,
-                            "publicStatsViewable": True,
-                        }
-                    }
-                ).execute()
-                publish_at = "immediate (schedule failed)"
-            except Exception as e2:
-                print(f"  Public publish also failed: {str(e2)[:80]}")
-
     # ---- PLAYLIST ----
     playlist_id = find_or_create_playlist(yt, lc, LANGUAGES[lc]["name"], short)
     add_to_playlist(yt, playlist_id, vid)
@@ -527,7 +407,7 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
     post_pinned_comment(yt, vid, pinned_comment)
 
     # ---- LOG FOR ANALYTICS ----
-    log_upload(vid, lc, "short" if short else "long", ct, title_b, publish_at)
+    log_upload(vid, lc, "short" if short else "long", ct, title_b, "public")
 
     return vid
 
