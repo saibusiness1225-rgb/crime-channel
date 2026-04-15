@@ -110,10 +110,11 @@ jobs:
           sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
           pip install numpy
 
-      - name: Download Scripts
+      - name: Download Scripts & Metadata
         uses: actions/download-artifact@v4
         with:
           name: crime-scripts
+          path: output
 
       - name: Download Images
         run: python downloadimages.py
@@ -160,6 +161,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: analytics-data
+          path: output
 
       - name: Run Comment Reply
         env:
@@ -194,6 +196,7 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: analytics-data
+          path: output
 
       - name: Run Analytics
         env:
