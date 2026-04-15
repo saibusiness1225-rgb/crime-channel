@@ -418,27 +418,61 @@ def main():
     lc = os.environ.get("LANG_CODE", "en")
     short = os.environ.get("VIDEO_TYPE", "long") == "short"
 
+    print(f"=== UPLOAD START: lang={lc}, type={'short' if short else 'long'} ===")
+    print(f"  OUT dir: {OUT}")
+    print(f"  Result file: {rf}")
+    print(f"  Result exists: {os.path.exists(rf)}")
+    print(f"  Metadata file: {mf}")
+    print(f"  Metadata exists: {os.path.exists(mf)}")
+
+    # List what's in the output directory
+    if os.path.exists(OUT):
+        print(f"  Output dir contents: {os.listdir(OUT)}")
+
     if not os.path.exists(rf):
-        print("SKIP: no result file")
+        print("FAILED: no result.json file found! Build step likely failed.")
+        print("  This means build.py did not produce a video.")
         import sys
-        sys.exit(0)
+        sys.exit(1)  # FAIL so we can see the problem
 
     with open(rf) as f:
         r = json.load(f)
+    print(f"  Result.json contents: {r}")
 
     if r.get("skip"):
-        print(f"SKIP: {lc} was skipped in build")
+        print(f"FAILED: Build was skipped for {lc}. Check build.py logs for errors.")
         import sys
-        sys.exit(0)
+        sys.exit(1)  # FAIL so we can see the problem
+
+    if not os.path.exists(mf):
+        print(f"FAILED: No metadata file found at {mf}")
+        import sys
+        sys.exit(1)
 
     with open(mf) as f:
         am = json.load(f)
 
     m = am.get(lc, {}).get("short" if short else "long", {})
     if not m:
-        print(f"SKIP: no metadata for {lc}")
+        print(f"FAILED: no metadata for {lc}/{('short' if short else 'long')}")
+        print(f"  Available keys in metadata: {list(am.keys())}")
+        for k, v in am.items():
+            print(f"    {k}: {list(v.keys()) if isinstance(v, dict) else v}")
         import sys
-        sys.exit(0)
+        sys.exit(1)
+
+    print(f"  Title: {m.get('title', 'MISSING')}")
+    print(f"  Tags: {m.get('tags', 'MISSING')[:3] if m.get('tags') else 'MISSING'}...")
+    print(f"  Video path: {r.get('video', 'MISSING')}")
+    print(f"  Video exists: {os.path.exists(r.get('video', ''))}")
+    print(f"  Thumbnail path: {r.get('thumbnail', 'MISSING')}")
+    print(f"  Thumbnail exists: {os.path.exists(r.get('thumbnail', ''))}")
+
+    # Verify video file exists before uploading
+    if not os.path.exists(r.get("video", "")):
+        print(f"FAILED: Video file not found at {r.get('video')}")
+        import sys
+        sys.exit(1)
 
     # Generate timestamps if long video
     timestamps = ""
@@ -465,9 +499,9 @@ def main():
             m.get("category", ""),
             timestamps
         )
-        print(f"\n SUCCESS: https://youtube.com/watch?v={vid}")
+        print(f"\n=== UPLOAD SUCCESS: https://youtube.com/watch?v={vid} ===")
     except Exception as e:
-        print(f"\n FAILED: Upload failed: {e}")
+        print(f"\n=== UPLOAD FAILED: {e} ===")
         import sys
         sys.exit(1)
 
