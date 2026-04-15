@@ -231,11 +231,18 @@ def dark_bg_rich(w, h):
                      fill=(r, g, b))
 
     # Add subtle film grain texture (prevents banding on YouTube compression)
-    import numpy as np
-    arr = np.array(bg)
-    noise = np.random.randint(-3, 4, arr.shape, dtype=np.int16)
-    arr = np.clip(arr.astype(np.int16) + noise, 0, 255).astype(np.uint8)
-    bg = Image.fromarray(arr)
+    try:
+        import numpy as np
+        arr = np.array(bg)
+        noise = np.random.randint(-3, 4, arr.shape, dtype=np.int16)
+        arr = np.clip(arr.astype(np.int16) + noise, 0, 255).astype(np.uint8)
+        bg = Image.fromarray(arr)
+    except ImportError:
+        # numpy not available, skip grain - not critical
+        pass
+    except Exception:
+        # grain failed, not critical
+        pass
 
     return bg
 
@@ -888,18 +895,45 @@ def main():
     os.makedirs(OUT, exist_ok=True)
     lc = os.environ.get("LANG_CODE", "en")
     iss = os.environ.get("VIDEO_TYPE", "long") == "short"
+
+    print(f"=== BUILD START: lang={lc}, type={'short' if iss else 'long'} ===")
+    print(f"  OUT dir: {OUT}")
+    print(f"  IMGS dir: {IMGS}")
+    print(f"  TEMP dir: {TEMP}")
+
+    # Check if script file exists
+    kind = "short" if iss else "long"
+    sp = os.path.join(OUT, "scripts", f"{kind}_{lc}.txt")
+    print(f"  Script path: {sp}")
+    print(f"  Script exists: {os.path.exists(sp)}")
+
+    # Check if images exist
+    if os.path.exists(IMGS):
+        img_count = len([f for f in os.listdir(IMGS) if f.lower().endswith(('.jpg', '.jpeg', '.png'))])
+        print(f"  Images available: {img_count}")
+    else:
+        print(f"  WARNING: Images directory does not exist!")
+
     r = process(lc, iss)
 
     if r:
         with open(os.path.join(OUT, "result.json"), "w") as f:
             json.dump(r, f)
-        print(f"\nDone: {lc} {'short' if iss else 'long'}")
+        print(f"\n=== BUILD SUCCESS: {lc} {'short' if iss else 'long'} ===")
+        print(f"  Video: {r.get('video', 'MISSING')}")
+        print(f"  Thumbnail: {r.get('thumbnail', 'MISSING')}")
+        # Verify video file actually exists
+        if r.get('video') and os.path.exists(r['video']):
+            size_mb = os.path.getsize(r['video']) / (1024*1024)
+            print(f"  Video size: {size_mb:.1f} MB")
+        else:
+            print(f"  ERROR: Video file not found at {r.get('video')}")
     else:
         with open(os.path.join(OUT, "result.json"), "w") as f:
             json.dump({"skip": True}, f)
-        print(f"\nSkipped: {lc} {'short' if iss else 'long'}")
+        print(f"\n=== BUILD FAILED: {lc} {'short' if iss else 'long'} ===")
         import sys
-        sys.exit(0)
+        sys.exit(1)  # FAIL the step so we can see it in GitHub Actions
 
 
 if __name__ == "__main__":
