@@ -362,7 +362,7 @@ def upload(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
 
     # ---- TITLE OPTIMIZATION ----
     # Clean title for YouTube (remove HTML, limit length)
-    ct = title.replace('<', '').replace('>', '').replace('&', 'and')strip()[:100]
+    ct = title.replace('<', '').replace('>', '').replace('&', 'and').strip()[:100]
 
     # Add engagement words to title if not present (for CTR)
     engagement_prefixes = ["SHOCKING:", "BREAKING:", "EXPOSED:", "REVEALED:", "THE TRUTH:"]
