@@ -112,8 +112,11 @@ def gen_with_fallback(prompt):
         print(f"  Trying {name}...")
         result = fn(prompt)
         if result and len(result) > 100:
-            return result
-    return "Error: All AI providers failed."
+            # Validate it's not an error message
+            if not result.strip().startswith("Error:"):
+                return result
+            print(f"  {name} returned error message, trying next...")
+    return None  # Return None instead of error string
 
 
 def extract_title(script):
@@ -132,20 +135,68 @@ REQUIREMENTS:
 Script excerpt:
 {script[:800]}"""
     title = gen_with_fallback(prompt)
-    title = title.strip().strip('"').strip("'").strip()
+    if title:
+        title = title.strip().strip('"').strip("'").strip()
+        # Validate: title should NOT contain error messages
+        if title.startswith("Error:") or len(title) < 5:
+            title = None
+    
+    # Fallback: Generate title from script content without AI
+    if not title:
+        print("  AI title generation failed, generating from script content...")
+        title = generate_title_from_script(script)
+    
     if len(title) > 100:
         title = title[:100]
     return title
 
 
+def generate_title_from_script(script):
+    """Generate a title from script content without AI. NEVER returns error string."""
+    prefixes = ["SHOCKING", "DARK", "HIDDEN", "CHILLING", "UNSEEN", "TERRIFYING"]
+    cases = ["Murder", "Disappearance", "Cold Case", "Mystery", "Crime", "Investigation",
+             "Kidnapping", "Heist", "Serial Killer", "Cold Case Murder", "Conspiracy"]
+    suffixes = ["That Haunts Detectives", "Nobody Talks About", "Still Unsolved",
+                "That Shocked the World", "Youve Never Heard Of", "With a Dark Secret",
+                "That Changed Everything", "With No End", "That Remains a Mystery"]
+    
+    # Try to extract real names/places from script for authenticity
+    words = script.split()
+    names = []
+    for w in words:
+        if w[0].isupper() and len(w) > 2 and w not in ('The', 'This', 'That', 'And', 'But',
+            'For', 'Was', 'Were', 'Has', 'Had', 'His', 'Her', 'They', 'Their', 'When',
+            'Where', 'What', 'Which', 'Who', 'How', 'Why', 'Not', 'All', 'From', 'Into',
+            'HOOK', 'INTRO', 'BACKGROUND', 'CRIME', 'INVESTIGATION', 'SUSPECTS',
+            'RESOLUTION', 'CONCLUSION', 'PAUSE', 'SCENE', 'CHANGE'):
+            names.append(w)
+            if len(names) >= 3:
+                break
+    
+    prefix = random.choice(prefixes)
+    case = random.choice(cases)
+    
+    if names:
+        title = f"{prefix} {case}: The {names[0]} {random.choice(suffixes)}"
+    else:
+        title = f"{prefix} {case} {random.choice(suffixes)}"
+    
+    return title[:70]
+
+
 def gen_meta(working_title, lang_code, lang_name, is_short):
     """Generate SEO-optimized metadata for a video."""
+    # Ensure working_title is NEVER an error message
+    safe_title = working_title
+    if safe_title.startswith("Error:") or len(safe_title) < 5:
+        safe_title = generate_title_from_script(working_title)
+    
     kind = "Short" if is_short else "Long"
     duration = "60-90 seconds" if is_short else "15-20 minutes"
 
     prompt = f"""Generate YouTube video metadata for a true crime video in {lang_name}.
 
-Title: {working_title}
+Title: {safe_title}
 Video type: {kind} ({duration})
 Language: {lang_name} ({lang_code})
 
@@ -169,6 +220,8 @@ Requirements:
 
     result = gen_with_fallback(prompt)
     try:
+        if result is None:
+            raise Exception("AI returned None")
         # Try to extract JSON from response
         json_match = re.search(r'\{[^{}]*\}', result, re.DOTALL)
         if json_match:
@@ -177,26 +230,26 @@ Requirements:
             meta = json.loads(result)
 
         # Validate and fill missing fields
-        if "title" not in meta or not meta["title"]:
-            meta["title"] = working_title[:70]
-        if "title_b" not in meta or not meta["title_b"]:
-            meta["title_b"] = meta["title"]  # Same title as fallback
-        if "description" not in meta:
+        if "title" not in meta or not meta["title"] or meta["title"].startswith("Error:"):
+            meta["title"] = safe_title[:70]
+        if "title_b" not in meta or not meta["title_b"] or meta["title_b"].startswith("Error:"):
+            meta["title_b"] = meta.get("title", safe_title)[:70]
+        if "description" not in meta or not meta["description"]:
             meta["description"] = ""
         if "tags" not in meta or not meta["tags"]:
             meta["tags"] = ["true crime", "mystery", "documentary"]
-        if "pinned_comment" not in meta:
+        if "pinned_comment" not in meta or not meta["pinned_comment"]:
             meta["pinned_comment"] = ""
-        if "category" not in meta:
+        if "category" not in meta or not meta["category"]:
             meta["category"] = random.choice(CASE_CATEGORIES)
 
         return meta
     except Exception as e:
         print(f"  Meta parse error: {str(e)[:60]}")
         return {
-            "title": working_title[:70],
-            "title_b": working_title[:70],
-            "description": f"True crime documentary: {working_title}",
+            "title": safe_title[:70],
+            "title_b": safe_title[:70],
+            "description": f"True crime documentary: {safe_title}",
             "tags": ["true crime", "mystery", "documentary", "crime", "unsolved"],
             "pinned_comment": f"What do you think really happened? Let us know in the comments.",
             "category": random.choice(CASE_CATEGORIES),
