@@ -463,11 +463,16 @@ def run_prepare():
     print(f"  Words: {len(ss.split())}")
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w", encoding="utf-8") as f:
         f.write(ss)
+    # Always include BUILD_LANGS (must match matrix in auto.yml), then add rotating extras
+    sel = list(BUILD_LANGS)
+    if "en" not in sel:
+        sel.insert(0, "en")
     ac = list(LANGUAGES.keys())
     d = datetime.date.today().toordinal()
-    sel = [ac[(d + i) % len(ac)] for i in range(LANGS_PER_RUN)]
-    if "en" not in sel:
-        sel[0] = "en"
+    while len(sel) < LANGS_PER_RUN:
+        extra = ac[(d + len(sel)) % len(ac)]
+        if extra not in sel:
+            sel.append(extra)
     print(f"\nLanguages: {[LANGUAGES[c]['name'] for c in sel]}")
     am = {}
     for code in sel:
