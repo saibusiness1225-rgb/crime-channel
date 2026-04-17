@@ -828,27 +828,60 @@ def slide_sub(op, w, h, fonts):
 
 def gen_atmospheric_music(dur, op):
     d = int(dur)+10
-    fc = (f"[0]volume=0.20[a];[1]volume=0.08[b1];[2]volume=0.06[b2];[3]volume=0.07[b3];"
-          f"[b1][b2]amix=inputs=2:duration=longest[b12];[b12][b3]amix=inputs=2:duration=longest[b];"
-          f"[4]volume=0.03[c];[5]volume=0.05[dd];"
-          f"[a][b]amix=inputs=2:duration=longest[ab];[ab][c]amix=inputs=2:duration=longest[abc];"
-          f"[abc][dd]amix=inputs=2:duration=longest[mix];"
-          f"[mix]aecho=0.8:0.88:60:0.4,lowpass=f=800,highpass=f=30,loudnorm=I=-16:LRA=11:TP=-1.5,volume=0.15[out]")
-    cmd = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=55:duration={d}",
-           "-f","lavfi","-i",f"sine=frequency=130.81:duration={d}",
-           "-f","lavfi","-i",f"sine=frequency=155.56:duration={d}",
-           "-f","lavfi","-i",f"sine=frequency=196:duration={d}",
-           "-f","lavfi","-i",f"sine=frequency=880:duration={d}",
-           "-f","lavfi","-i",f"sine=frequency=35:duration={d}",
-           "-filter_complex",fc,"-map","[out]","-c:a","aac","-b:a","96k",op]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
-    if r.returncode != 0:
-        fc2 = f"[0]volume=0.20[a];[1]volume=0.10[b];[a][b]amix=inputs=2:duration=longest,aecho=0.8:0.88:60:0.4,lowpass=f=400,volume=0.12[out]"
+    # Attempt 1: Full atmospheric with echo, filters
+    try:
+        fc = ("[0]volume=0.20[a];[1]volume=0.08[b1];[2]volume=0.06[b2];[3]volume=0.07[b3];"
+              "[b1][b2]amix=inputs=2:duration=longest[b12];[b12][b3]amix=inputs=2:duration=longest[b];"
+              "[4]volume=0.03[c];[5]volume=0.05[dd];"
+              "[a][b]amix=inputs=2:duration=longest[ab];[ab][c]amix=inputs=2:duration=longest[abc];"
+              "[abc][dd]amix=inputs=2:duration=longest[mix];"
+              "[mix]lowpass=f=800,highpass=f=30,volume=0.15[out]")
+        cmd = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=55:duration={d}",
+               "-f","lavfi","-i",f"sine=frequency=130.81:duration={d}",
+               "-f","lavfi","-i",f"sine=frequency=155.56:duration={d}",
+               "-f","lavfi","-i",f"sine=frequency=196:duration={d}",
+               "-f","lavfi","-i",f"sine=frequency=880:duration={d}",
+               "-f","lavfi","-i",f"sine=frequency=35:duration={d}",
+               "-filter_complex",fc,"-map","[out]","-c:a","aac","-b:a","96k",op]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 1000:
+            return True
+        print(f"    Music attempt 1 failed: {(r.stderr or '')[:200]}")
+    except Exception as e:
+        print(f"    Music attempt 1 error: {e}")
+    # Attempt 2: Simpler 2-tone with basic filter
+    try:
+        fc2 = "[0]volume=0.20[a];[1]volume=0.10[b];[a][b]amix=inputs=2:duration=longest,lowpass=f=400,volume=0.12[out]"
         cmd2 = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=55:duration={d}",
                 "-f","lavfi","-i",f"sine=frequency=82.41:duration={d}",
                 "-filter_complex",fc2,"-map","[out]","-c:a","aac","-b:a","64k",op]
-        subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
-    return os.path.exists(op)
+        r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
+        if r2.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 1000:
+            return True
+        print(f"    Music attempt 2 failed: {(r2.stderr or '')[:200]}")
+    except Exception as e:
+        print(f"    Music attempt 2 error: {e}")
+    # Attempt 3: Single sine tone - absolute simplest
+    try:
+        cmd3 = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=65:duration={d}",
+                "-af","lowpass=f=300,volume=0.08","-c:a","aac","-b:a","48k",op]
+        r3 = subprocess.run(cmd3, capture_output=True, text=True, timeout=30)
+        if r3.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 500:
+            return True
+        print(f"    Music attempt 3 failed: {(r3.stderr or '')[:200]}")
+    except Exception as e:
+        print(f"    Music attempt 3 error: {e}")
+    print("    WARNING: Music generation failed, continuing without music")
+    return False
+
+
+def _ffmpeg_run(cmd, label="ffmpeg", timeout=600):
+    """Run FFmpeg with proper error logging."""
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
+    if r.returncode != 0:
+        err = (r.stderr or "")[:500]
+        print(f"    {label} STDERR: {err}")
+    return r
 
 
 def render_video(imgs, ap, srt_path, op, short=False):
@@ -908,48 +941,148 @@ def render_video(imgs, ap, srt_path, op, short=False):
         for i in range(5):
             s = os.path.join(TEMP, f"s_emergency_{i:04d}.jpg")
             dark_bg_rich(w,h).save(s, quality=95); spaths.append(s)
+    # Write concat demuxer file with absolute paths
     cl = os.path.join(TEMP, "slides.txt")
     with open(cl, "w") as f:
         for i, (_, _, dur) in enumerate(slides):
-            if i < len(spaths): f.write(f"file '{spaths[i]}'\nduration {dur:.3f}\n")
-        if spaths: f.write(f"file '{spaths[-1]}'\n")
+            if i < len(spaths):
+                p = os.path.abspath(spaths[i])
+                f.write(f"file '{p}'\nduration {dur:.3f}\n")
+        if spaths:
+            p = os.path.abspath(spaths[-1])
+            f.write(f"file '{p}'\n")
+    # Generate background music
     mp = os.path.join(TEMP, "music.mp3")
-    print(f"    Generating music..."); hm = gen_atmospheric_music(adur, mp)
-    inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
-    if hm: inputs += ["-i",mp]
+    print(f"    Generating music...")
+    hm = gen_atmospheric_music(adur, mp)
+    # Validate music file
+    if hm and (not os.path.exists(mp) or os.path.getsize(mp) < 500):
+        print("    WARNING: Music file invalid, skipping music")
+        hm = False
+    # Build subtitle force_style with escaped commas for FFmpeg filter parser
+    # FFmpeg treats commas as filter separators, so we must escape them with backslash
     fs_size = 18 if short else 22
+    force_style = (f"FontSize={fs_size}\\,PrimaryColour=&H00FFFFFF\\,OutlineColour=&H80000000\\,"
+                   f"BackColour=&H80000000\\,Outline=2\\,Shadow=1\\,MarginV=35")
     has_subs = srt_path and os.path.exists(srt_path) and os.path.getsize(srt_path) > 50
+
+    # === ATTEMPT 1: Full render with subtitles + music ===
     if has_subs and hm:
-        srt_temp = os.path.join(TEMP,"subs.srt"); shutil.copy2(srt_path, srt_temp)
-        srt_escaped = srt_temp.replace("\\","/").replace(":","\\:")
-        fc = (f"[0:v]fps={FPS},format=yuv420p,subtitles='{srt_escaped}':force_style="
-              f"'FontSize={fs_size},PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
-              f"BackColour=&H80000000,Outline=2,Shadow=1,MarginV=35'[v];"
-              f"[1:a][2:a]amix=inputs=2:duration=first:weights=1 0.3[a]")
-    elif has_subs:
-        srt_temp = os.path.join(TEMP,"subs.srt"); shutil.copy2(srt_path, srt_temp)
-        srt_escaped = srt_temp.replace("\\","/").replace(":","\\:")
-        fc = (f"[0:v]fps={FPS},format=yuv420p,subtitles='{srt_escaped}':force_style="
-              f"'FontSize={fs_size},PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,"
-              f"BackColour=&H80000000,Outline=2,Shadow=1,MarginV=35'[v];[1:a]acopy[a]")
-    elif hm:
-        fc = f"[0:v]fps={FPS},format=yuv420p[v];[1:a][2:a]amix=inputs=2:duration=first:weights=1 0.3[a]"
-    else:
+        try:
+            srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
+            srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
+            fc = (f"[0:v]fps={FPS},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
+                  f"[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]")
+            inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp]
+            cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
+                    "-c:v",CODEC,"-preset",PRESET,"-crf",str(CRF),"-c:a","aac","-b:a","192k",
+                    "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+            r = _ffmpeg_run(cmd, "render+subs+music")
+            if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
+                print("    Render: subtitles + music OK")
+                return
+            if os.path.exists(op): os.remove(op)
+            print("    Attempt 1 (subs+music) failed, trying next...")
+        except Exception as e:
+            print(f"    Attempt 1 error: {e}")
+            try:
+                if os.path.exists(op): os.remove(op)
+            except:
+                pass
+
+    # === ATTEMPT 2: Subtitles only (no music) ===
+    if has_subs:
+        try:
+            srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
+            srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
+            fc = (f"[0:v]fps={FPS},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
+                  f"[1:a]acopy[a]")
+            inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
+            cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
+                    "-c:v",CODEC,"-preset",PRESET,"-crf",str(CRF),"-c:a","aac","-b:a","192k",
+                    "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+            r = _ffmpeg_run(cmd, "render+subs")
+            if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
+                print("    Render: subtitles only OK")
+                return
+            if os.path.exists(op): os.remove(op)
+            print("    Attempt 2 (subs only) failed, trying next...")
+        except Exception as e:
+            print(f"    Attempt 2 error: {e}")
+            try:
+                if os.path.exists(op): os.remove(op)
+            except:
+                pass
+
+    # === ATTEMPT 3: Music only (no subtitles) ===
+    if hm:
+        try:
+            fc = f"[0:v]fps={FPS},format=yuv420p[v];[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]"
+            inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp]
+            cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
+                    "-c:v",CODEC,"-preset",PRESET,"-crf",str(CRF),"-c:a","aac","-b:a","192k",
+                    "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+            r = _ffmpeg_run(cmd, "render+music")
+            if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
+                print("    Render: music only OK")
+                return
+            if os.path.exists(op): os.remove(op)
+            print("    Attempt 3 (music only) failed, trying next...")
+        except Exception as e:
+            print(f"    Attempt 3 error: {e}")
+            try:
+                if os.path.exists(op): os.remove(op)
+            except:
+                pass
+
+    # === ATTEMPT 4: Simple video + audio, no effects ===
+    try:
         fc = f"[0:v]fps={FPS},format=yuv420p[v];[1:a]acopy[a]"
-    cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-            "-c:v",CODEC,"-preset",PRESET,"-crf",str(CRF),"-c:a","aac","-b:a","192k",
-            "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
-    if r.returncode != 0:
-        if hm: fc2 = f"[0:v]fps={FPS},format=yuv420p[v];[1:a][2:a]amix=inputs=2:duration=first:weights=1 0.3[a]"
-        else: fc2 = f"[0:v]fps={FPS},format=yuv420p[v];[1:a]acopy[a]"
-        cmd2 = (["ffmpeg","-y"]+inputs+["-filter_complex",fc2,"-map","[v]","-map","[a]",
-                 "-c:v",CODEC,"-preset","ultrafast","-crf","23","-c:a","aac","-b:a","128k",
-                 "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
-        r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=600)
-        if r2.returncode != 0: raise Exception("Video encoding failed")
-    if not (os.path.exists(op) and os.path.getsize(op) > 10000):
-        raise Exception("Video file missing or too small")
+        inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
+        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
+                "-c:v",CODEC,"-preset","fast","-crf","23","-c:a","aac","-b:a","128k",
+                "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+        r = _ffmpeg_run(cmd, "render-simple")
+        if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
+            print("    Render: simple (no effects) OK")
+            return
+        if os.path.exists(op): os.remove(op)
+        print("    Attempt 4 (simple) failed, trying final fallback...")
+    except Exception as e:
+        print(f"    Attempt 4 error: {e}")
+        try:
+            if os.path.exists(op): os.remove(op)
+        except:
+            pass
+
+    # === ATTEMPT 5: Absolute minimal - no filter_complex at all ===
+    try:
+        # Create a simple slideshow video first with concat, then mux audio
+        base_video = os.path.join(TEMP, "base_video.mp4")
+        cmd_slides = (["ffmpeg","-y","-f","concat","-safe","0","-i",cl,
+                        "-vf",f"fps={FPS},format=yuv420p",
+                        "-c:v",CODEC,"-preset","ultrafast","-crf","28",
+                        "-pix_fmt","yuv420p","-an",base_video])
+        r = _ffmpeg_run(cmd_slides, "render-slides-only")
+        if r.returncode != 0 or not os.path.exists(base_video) or os.path.getsize(base_video) < 5000:
+            raise Exception("Slide video creation failed")
+        # Mux audio onto the slide video
+        cmd_mux = (["ffmpeg","-y","-i",base_video,"-i",ap,
+                     "-c:v","copy","-c:a","aac","-b:a","128k",
+                     "-shortest","-movflags","+faststart",op])
+        r = _ffmpeg_run(cmd_mux, "render-mux-audio")
+        if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
+            print("    Render: minimal mux OK")
+            return
+        if os.path.exists(op): os.remove(op)
+    except Exception as e:
+        print(f"    Attempt 5 error: {e}")
+        try:
+            if os.path.exists(op): os.remove(op)
+        except:
+            pass
+
+    raise Exception("Video encoding failed after all 5 attempts. Check FFmpeg installation and logs above.")
 
 
 def make_thumb(title, imgs, op, short=False):
