@@ -46,6 +46,7 @@ IMAGES_PER_SHORT = 8
 # ═══════════════════════════════════════════════════════════════
 YT_CATEGORY = "24"  # Entertainment
 LANGS_PER_RUN = 3
+BUILD_LANGS = ["en", "es", "hi"]  # Must match matrix in auto.yml
 
 # ═══════════════════════════════════════════════════════════════
 # SCHEDULING
