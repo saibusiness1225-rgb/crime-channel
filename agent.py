@@ -351,19 +351,30 @@ def sanitize_youtube_title(title):
 # ═══════════════════════════════════════════════════════════════
 
 def gen_script(category):
-    prompt = f"""Write a compelling, factual true crime documentary script about: {category}
+    # Try AI first with explicit word count requirement
+    for attempt in range(3):
+        prompt = f"""Write a compelling, factual true crime documentary script about: {category}
+
+CRITICAL: You MUST write at least 500 words. This is non-negotiable.
 
 REQUIREMENTS:
-- 2000-2500 words for a 15-20 minute video
+- MINIMUM 500 words, aim for 800-1200 words
 - Use EXACTLY these section markers: [HOOK] [INTRO] [BACKGROUND] [THE CRIME] [INVESTIGATION] [SUSPECTS] [RESOLUTION] [CONCLUSION]
 - [HOOK]: Start with a shocking fact or question that grabs attention in the first 10 seconds
-- End with a question that forces viewers to comment
+- Each section must have at least 3-4 detailed sentences
+- End with [PAUSE] and a question that forces viewers to comment
 - DO NOT use any made-up or fictional names. Use only real, well-known cases.
-- Write in a documentary narration style - dramatic but factual"""
-    result = gen_with_fallback(prompt)
-    if result and len(result) > 500:
-        return result
-    print("  AI failed. Using OFFLINE template...")
+- Write in a documentary narration style - dramatic but factual
+- DO NOT stop early. Write the COMPLETE script with all sections."""
+        result = gen_with_fallback(prompt)
+        if result:
+            wc = len(result.split())
+            if wc >= 200:
+                print(f"  AI script: {wc} words")
+                return result
+            print(f"  AI attempt {attempt+1}: too short ({wc} words), retrying...")
+    # All AI attempts failed or too short - use OFFLINE template (guaranteed 400+ words)
+    print("  AI failed or too short. Using OFFLINE template...")
     key = category if category in OFFLINE_SCRIPTS else random.choice(list(OFFLINE_SCRIPTS.keys()))
     return OFFLINE_SCRIPTS[key]["script"]
 
@@ -441,9 +452,22 @@ Write ALL in {lang_name}."""
 
 
 def translate(text, lang_code, lang_name):
-    prompt = f"""Translate this true crime script to {lang_name}. Keep [HOOK][INTRO][BACKGROUND][THE CRIME][INVESTIGATION][SUSPECTS][RESOLUTION][CONCLUSION][PAUSE] markers unchanged. Translate naturally.\n{text[:3000]}"""
+    orig_wc = len(text.split())
+    prompt = f"""Translate this ENTIRE true crime script to {lang_name}. 
+Keep [HOOK][INTRO][BACKGROUND][THE CRIME][INVESTIGATION][SUSPECTS][RESOLUTION][CONCLUSION][PAUSE] markers unchanged. 
+Translate naturally. DO NOT skip or shorten any sections. The translation must be at least as long as the original.
+
+{text[:4000]}"""
     result = gen_with_fallback(prompt)
-    return result if result and len(result) > 50 else text
+    if not result or len(result) < 50:
+        print(f"  Translation failed, keeping original ({orig_wc} words)")
+        return text
+    result_wc = len(result.split())
+    # If translation lost more than 60% of words, it's broken - keep original
+    if result_wc < orig_wc * 0.4:
+        print(f"  Translation too short ({result_wc} vs {orig_wc} original), keeping original")
+        return text
+    return result
 
 
 def run_prepare():
@@ -1135,16 +1159,17 @@ def run_build():
     if not os.path.exists(sp): print("SKIP: no script"); sys.exit(1)
     with open(sp, "r", encoding="utf-8") as f: raw = f.read()
     clean = clean_text(raw); wc = len(clean.split())
-    min_w = 40 if iss else 300
-    if wc < min_w: print(f"SKIP: too short ({wc} words)"); sys.exit(1)
+    min_w = 30 if iss else 80
+    if wc < min_w: print(f"SKIP: too short ({wc} words, need {min_w})"); sys.exit(1)
+    if wc < 200 and not iss: print(f"  WARNING: script is short ({wc} words), video will be ~{wc/2.5:.0f}s")
     print(f"Building {LANGUAGES[lc]['name']} {kind} ({wc} words)...")
     ap = os.path.join(OUT, f"audio_{kind}_{lc}.mp3")
     vtt_path = os.path.join(OUT, f"subs_{kind}_{lc}.vtt")
     ok = asyncio.run(gen_tts(clean, lc, kind, ap, vtt_path))
     if not ok or not os.path.exists(ap) or os.path.getsize(ap) < 1000:
         print("FAIL: TTS failed"); sys.exit(1)
-    adur = get_dur(ap); min_dur = 15.0 if iss else 120.0
-    if adur < min_dur: print(f"SKIP: audio too short ({adur:.0f}s)"); sys.exit(1)
+    adur = get_dur(ap); min_dur = 10.0 if iss else 30.0
+    if adur < min_dur: print(f"SKIP: audio too short ({adur:.0f}s, need {min_dur:.0f}s)"); sys.exit(1)
     srt_path = vtt_to_srt(vtt_path)
     ai = sorted([os.path.join(IMGS,f) for f in os.listdir(IMGS) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.exists(IMGS) else []
     if not ai:
@@ -1158,7 +1183,7 @@ def run_build():
     try: render_video(imgs, ap, srt_path, vp, iss)
     except Exception as e: print(f"FAIL: render error: {e}"); sys.exit(1)
     if not os.path.exists(vp): sys.exit(1)
-    vd = get_dur(vp); md = 15.0 if iss else 120.0
+    vd = get_dur(vp); md = 10.0 if iss else 30.0
     if vd < md:
         try: os.remove(vp)
         except: pass
