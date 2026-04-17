@@ -136,9 +136,9 @@ POST_COMMUNITY_POLL = True
 # ═══════════════════════════════════════════════════════════════
 WORK = os.environ.get("GITHUB_WORKSPACE", "/tmp/crime")
 OUT  = os.path.join(WORK, "output")
-IMGS = os.path.join(WORK, "images")
-TEMP = os.path.join(WORK, "temp")
-ANALYTICS = os.path.join(WORK, "analytics")
+IMGS = os.path.join(OUT, "images")       # Inside output/ so artifacts carry images
+TEMP = os.path.join(OUT, "temp")
+ANALYTICS = os.path.join(OUT, "analytics")
 
 # ═══════════════════════════════════════════════════════════════
 # API KEYS
