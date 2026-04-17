@@ -1,230 +1,222 @@
-name: Crime Auto - OPTIMIZED
+name: Crime Auto
 
 on:
   schedule:
-    # Multiple posting times throughout the day for maximum reach
-    - cron: '0 6 * * *'    # 6 AM UTC = 11:30 AM IST (Morning audience)
-    - cron: '0 12 * * *'   # 12 PM UTC = 5:30 PM IST (Afternoon audience)
-    - cron: '0 17 * * *'   # 5 PM UTC = 10:30 PM IST (Prime time)
-    - cron: '0 22 * * *'   # 10 PM UTC = 3:30 AM IST (Night owls / US audience)
+    - cron: '0 6 * * *'    # 6 AM UTC = 11:30 AM IST
+    - cron: '0 12 * * *'   # 12 PM UTC = 5:30 PM IST
+    - cron: '0 17 * * *'   # 5 PM UTC = 10:30 PM IST
+    - cron: '0 22 * * *'   # 10 PM UTC = 3:30 AM IST
   workflow_dispatch:
-
-permissions:
-  contents: write
+    inputs:
+      lang:
+        description: 'Language code (en, es, hi, fr, pt, de, ja, ar)'
+        required: false
+        default: 'en'
 
 jobs:
-  # ==========================================
-  # JOB 1: PREPARE (Generate scripts + SEO metadata)
-  # ==========================================
+  # ──────────────────────────────────────────────
+  # Step 1: Generate scripts & metadata
+  # ──────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
-    outputs:
-      matrix: ${{ steps.set-matrix.outputs.matrix }}
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install FFmpeg & System Tools
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
-
-      - name: Run Prepare Script
-        id: run-prepare
-        run: python prepare.py
-        continue-on-error: true
-
-      - name: Create Safety Files
-        run: |
-          mkdir -p output/scripts
-          mkdir -p output/metadata
-          mkdir -p output/analytics
-          mkdir -p analytics
-
-          if [ ! -f output/selected_languages.json ]; then
-            echo '["en"]' > output/selected_languages.json
-          fi
-          if [ ! -f output/scripts/long_en.txt ]; then
-            echo "Test script content. The prepare script likely failed to generate the real one." > output/scripts/long_en.txt
-          fi
-          if [ ! -f output/metadata/all.json ]; then
-            echo '{"en":{"long":{"title":"True Crime Mystery","description":"","tags":[],"pinned_comment":"","category":"","title_b":""}}}' > output/metadata/all.json
-          fi
-
-          echo '{"status":"prepared"}' > output/analytics-data.json
-
-      - name: Set Matrix Output
-        id: set-matrix
-        run: |
-          LIST=$(cat output/selected_languages.json)
-          echo "matrix={\"code\":$LIST}" >> $GITHUB_OUTPUT
-
-      - name: Upload Scripts & Metadata
-        uses: actions/upload-artifact@v4
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - run: python agent.py prepare
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      - uses: actions/upload-artifact@v4
         with:
-          name: crime-scripts
-          path: output/
+          name: output
+          path: output
 
-      - name: Upload Analytics Data
-        uses: actions/upload-artifact@v4
-        with:
-          name: analytics-data
-          path: output/analytics-data.json
-
-  # ==========================================
-  # JOB 2: BUILD VIDEO (High quality, no black screens)
-  # ==========================================
-  build:
+  # ──────────────────────────────────────────────
+  # Step 2: Download images
+  # ──────────────────────────────────────────────
+  download:
     needs: prepare
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: output
+          path: output
+      - run: python agent.py download
+        env:
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: output
+          path: output
+
+  # ──────────────────────────────────────────────
+  # Step 3: Build long videos (matrix: 3 languages)
+  # ──────────────────────────────────────────────
+  build-long:
+    needs: download
+    runs-on: ubuntu-latest
     strategy:
-      matrix: ${{ fromJson(needs.prepare.outputs.matrix) }}
+      matrix:
+        lang: [en, es, hi]
       fail-fast: false
-
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-
-      - name: Install FFmpeg & Fonts
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg fonts-dejavu-core fonts-liberation
-          pip install numpy
-
-      - name: Download Scripts & Metadata
-        uses: actions/download-artifact@v4
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: actions/download-artifact@v4
         with:
-          name: crime-scripts
+          name: output
+          path: output
+      - run: python agent.py build
+        env:
+          LANG_CODE: ${{ matrix.lang }}
+          VIDEO_TYPE: long
+      - uses: actions/upload-artifact@v4
+        with:
+          name: output-long-${{ matrix.lang }}
           path: output
 
-      - name: Download Images
-        run: python downloadimages.py
-
-      - name: Build Video (Long)
+  # ──────────────────────────────────────────────
+  # Step 4: Build shorts (matrix: 3 languages)
+  # ──────────────────────────────────────────────
+  build-short:
+    needs: download
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lang: [en, es, hi]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg
+      - uses: actions/download-artifact@v4
+        with:
+          name: output
+          path: output
+      - run: python agent.py build
         env:
-          LANG_CODE: ${{ matrix.code }}
-          VIDEO_TYPE: long
-        run: python build.py
+          LANG_CODE: ${{ matrix.lang }}
+          VIDEO_TYPE: short
+      - uses: actions/upload-artifact@v4
+        with:
+          name: output-short-${{ matrix.lang }}
+          path: output
 
-      - name: Upload Long Video to YouTube
+  # ──────────────────────────────────────────────
+  # Step 5: Upload long videos
+  # ──────────────────────────────────────────────
+  upload-long:
+    needs: build-long
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lang: [en, es, hi]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: output-long-${{ matrix.lang }}
+          path: output
+      - run: python agent.py upload
         env:
-          LANG_CODE: ${{ matrix.code }}
+          LANG_CODE: ${{ matrix.lang }}
           VIDEO_TYPE: long
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-        run: python upload.py
-
-      - name: Build Video (Short)
-        env:
-          LANG_CODE: ${{ matrix.code }}
-          VIDEO_TYPE: short
-        run: python build.py
-
-      - name: Upload Short Video to YouTube
-        env:
-          LANG_CODE: ${{ matrix.code }}
-          VIDEO_TYPE: short
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+
+  # ──────────────────────────────────────────────
+  # Step 6: Upload shorts
+  # ──────────────────────────────────────────────
+  upload-short:
+    needs: build-short
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        lang: [en, es, hi]
+      fail-fast: false
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: output-short-${{ matrix.lang }}
+          path: output
+      - run: python agent.py upload
+        env:
+          LANG_CODE: ${{ matrix.lang }}
+          VIDEO_TYPE: short
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-        run: python upload.py
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
 
-  # ==========================================
-  # JOB 3: COMMENT REPLY (Engagement booster)
-  # ==========================================
+  # ──────────────────────────────────────────────
+  # Step 7: Auto-reply to comments
+  # ──────────────────────────────────────────────
   comment-reply:
-    needs: [prepare, build]
+    needs: [upload-long, upload-short]
     runs-on: ubuntu-latest
-    if: always() && needs.build.result == 'success'
-
+    if: always()
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-
-      - name: Download Analytics
-        uses: actions/download-artifact@v4
-        with:
-          name: analytics-data
-          path: output
-
-      - name: Run Comment Reply
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python agent.py comment
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-        run: python comment_reply.py
 
-  # ==========================================
-  # JOB 4: ANALYTICS & A/B TESTING
-  # ==========================================
-  analytics-and-ab:
-    needs: [prepare, build]
+  # ──────────────────────────────────────────────
+  # Step 8: A/B title testing + analytics
+  # ──────────────────────────────────────────────
+  ab-test:
+    needs: [upload-long, upload-short]
     runs-on: ubuntu-latest
-    if: always() && needs.build.result == 'success'
-
+    if: always()
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v4
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-          cache: 'pip'
-
-      - name: Install Dependencies
-        run: pip install -r requirements.txt
-
-      - name: Download Analytics
-        uses: actions/download-artifact@v4
-        with:
-          name: analytics-data
-          path: output
-
-      - name: Run Analytics
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - run: python agent.py abtest
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-        run: python analytics.py
-
-      - name: Run A/B Testing
+      - run: python agent.py analytics
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-        run: python ab_testing.py
