@@ -19,6 +19,7 @@ jobs:
   # ──────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -41,6 +42,7 @@ jobs:
   download:
     needs: prepare
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -66,6 +68,7 @@ jobs:
   build-long:
     needs: download
     runs-on: ubuntu-latest
+    timeout-minutes: 60          # CHANGED: 20-25 min videos need more render time
     strategy:
       matrix:
         lang: [en, es, hi]
@@ -85,6 +88,7 @@ jobs:
         env:
           LANG_CODE: ${{ matrix.lang }}
           VIDEO_TYPE: long
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # ADDED: expand_script needs AI
       - uses: actions/upload-artifact@v4
         with:
           name: output-long-${{ matrix.lang }}
@@ -96,6 +100,7 @@ jobs:
   build-short:
     needs: download
     runs-on: ubuntu-latest
+    timeout-minutes: 30          # ADDED: safety timeout for shorts
     strategy:
       matrix:
         lang: [en, es, hi]
@@ -115,6 +120,7 @@ jobs:
         env:
           LANG_CODE: ${{ matrix.lang }}
           VIDEO_TYPE: short
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # ADDED: consistency
       - uses: actions/upload-artifact@v4
         with:
           name: output-short-${{ matrix.lang }}
@@ -126,6 +132,7 @@ jobs:
   upload-long:
     needs: build-long
     runs-on: ubuntu-latest
+    timeout-minutes: 30          # ADDED: large video uploads can be slow
     strategy:
       matrix:
         lang: [en, es, hi]
@@ -148,6 +155,11 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # ADDED: Re-upload output so analytics data persists for later jobs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uploaded-long-${{ matrix.lang }}
+          path: output
 
   # ──────────────────────────────────────────────
   # Step 6: Upload shorts
@@ -155,6 +167,7 @@ jobs:
   upload-short:
     needs: build-short
     runs-on: ubuntu-latest
+    timeout-minutes: 20          # ADDED
     strategy:
       matrix:
         lang: [en, es, hi]
@@ -177,6 +190,11 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      # ADDED: Re-upload output so analytics data persists
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uploaded-short-${{ matrix.lang }}
+          path: output
 
   # ──────────────────────────────────────────────
   # Step 7: Auto-reply to comments
@@ -184,6 +202,7 @@ jobs:
   comment-reply:
     needs: [upload-long, upload-short]
     runs-on: ubuntu-latest
+    timeout-minutes: 15          # ADDED
     if: always()
     steps:
       - uses: actions/checkout@v4
@@ -191,6 +210,12 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
+      # ADDED: Download at least one upload artifact to get analytics/uploads.jsonl
+      - uses: actions/download-artifact@v4
+        with:
+          name: uploaded-long-en
+          path: output
+        continue-on-error: true   # Don't fail if upload-long-en failed
       - run: python agent.py comment
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
@@ -204,6 +229,7 @@ jobs:
   ab-test:
     needs: [upload-long, upload-short]
     runs-on: ubuntu-latest
+    timeout-minutes: 15          # ADDED
     if: always()
     steps:
       - uses: actions/checkout@v4
@@ -211,6 +237,12 @@ jobs:
         with:
           python-version: '3.11'
       - run: pip install -r requirements.txt
+      # ADDED: Download at least one upload artifact to get analytics data
+      - uses: actions/download-artifact@v4
+        with:
+          name: uploaded-long-en
+          path: output
+        continue-on-error: true
       - run: python agent.py abtest
         env:
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
