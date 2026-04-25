@@ -2,10 +2,10 @@ name: Crime Auto
 
 on:
   schedule:
-    - cron: '0 6 * * *'    # 6 AM UTC = 11:30 AM IST
-    - cron: '0 12 * * *'   # 12 PM UTC = 5:30 PM IST
-    - cron: '0 17 * * *'   # 5 PM UTC = 10:30 PM IST
-    - cron: '0 22 * * *'   # 10 PM UTC = 3:30 AM IST
+    - cron: '0 6 * * *'
+    - cron: '0 12 * * *'
+    - cron: '0 17 * * *'
+    - cron: '0 22 * * *'
   workflow_dispatch:
     inputs:
       lang:
@@ -14,12 +14,9 @@ on:
         default: 'en'
 
 jobs:
-  # ──────────────────────────────────────────────
-  # Step 1: Generate scripts & metadata
-  # ──────────────────────────────────────────────
   prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,9 +33,6 @@ jobs:
           name: output
           path: output
 
-  # ──────────────────────────────────────────────
-  # Step 2: Download images
-  # ──────────────────────────────────────────────
   download:
     needs: prepare
     runs-on: ubuntu-latest
@@ -62,16 +56,13 @@ jobs:
           name: output
           path: output
 
-  # ──────────────────────────────────────────────
-  # Step 3: Build long videos (matrix: 3 languages)
-  # ──────────────────────────────────────────────
   build-long:
     needs: download
     runs-on: ubuntu-latest
-    timeout-minutes: 60          # CHANGED: 20-25 min videos need more render time
+    timeout-minutes: 45
     strategy:
       matrix:
-        lang: [en, es, hi]
+        lang: [en, es, hi, fr, pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -88,22 +79,19 @@ jobs:
         env:
           LANG_CODE: ${{ matrix.lang }}
           VIDEO_TYPE: long
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # ADDED: expand_script needs AI
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: output-long-${{ matrix.lang }}
           path: output
 
-  # ──────────────────────────────────────────────
-  # Step 4: Build shorts (matrix: 3 languages)
-  # ──────────────────────────────────────────────
   build-short:
     needs: download
     runs-on: ubuntu-latest
-    timeout-minutes: 30          # ADDED: safety timeout for shorts
+    timeout-minutes: 30
     strategy:
       matrix:
-        lang: [en, es, hi]
+        lang: [en, es, hi, fr, pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -120,22 +108,19 @@ jobs:
         env:
           LANG_CODE: ${{ matrix.lang }}
           VIDEO_TYPE: short
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}   # ADDED: consistency
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       - uses: actions/upload-artifact@v4
         with:
           name: output-short-${{ matrix.lang }}
           path: output
 
-  # ──────────────────────────────────────────────
-  # Step 5: Upload long videos
-  # ──────────────────────────────────────────────
   upload-long:
     needs: build-long
     runs-on: ubuntu-latest
-    timeout-minutes: 30          # ADDED: large video uploads can be slow
+    timeout-minutes: 30
     strategy:
       matrix:
-        lang: [en, es, hi]
+        lang: [en, es, hi, fr, pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -155,22 +140,18 @@ jobs:
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      # ADDED: Re-upload output so analytics data persists for later jobs
       - uses: actions/upload-artifact@v4
         with:
           name: uploaded-long-${{ matrix.lang }}
           path: output
 
-  # ──────────────────────────────────────────────
-  # Step 6: Upload shorts
-  # ──────────────────────────────────────────────
   upload-short:
     needs: build-short
     runs-on: ubuntu-latest
-    timeout-minutes: 20          # ADDED
+    timeout-minutes: 20
     strategy:
       matrix:
-        lang: [en, es, hi]
+        lang: [en, es, hi, fr, pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -188,68 +169,4 @@ jobs:
           VIDEO_TYPE: short
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      # ADDED: Re-upload output so analytics data persists
-      - uses: actions/upload-artifact@v4
-        with:
-          name: uploaded-short-${{ matrix.lang }}
-          path: output
-
-  # ──────────────────────────────────────────────
-  # Step 7: Auto-reply to comments
-  # ──────────────────────────────────────────────
-  comment-reply:
-    needs: [upload-long, upload-short]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15          # ADDED
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      # ADDED: Download at least one upload artifact to get analytics/uploads.jsonl
-      - uses: actions/download-artifact@v4
-        with:
-          name: uploaded-long-en
-          path: output
-        continue-on-error: true   # Don't fail if upload-long-en failed
-      - run: python agent.py comment
-        env:
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-
-  # ──────────────────────────────────────────────
-  # Step 8: A/B title testing + analytics
-  # ──────────────────────────────────────────────
-  ab-test:
-    needs: [upload-long, upload-short]
-    runs-on: ubuntu-latest
-    timeout-minutes: 15          # ADDED
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      # ADDED: Download at least one upload artifact to get analytics data
-      - uses: actions/download-artifact@v4
-        with:
-          name: uploaded-long-en
-          path: output
-        continue-on-error: true
-      - run: python agent.py abtest
-        env:
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-      - run: python agent.py analytics
-        env:
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          YT_REFRESH_TOKEN: ${{ secrets.Y
