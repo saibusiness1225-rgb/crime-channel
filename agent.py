@@ -347,136 +347,211 @@ def sanitize_youtube_title(title):
 
 
 # ═══════════════════════════════════════════════════════════════
-# PREPARE MODULE
+# SCRIPT LENGTH MANAGEMENT
 # ═══════════════════════════════════════════════════════════════
 
+def parse_sections(s):
+    ms = ['HOOK','INTRO','BACKGROUND','THE CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION']
+    secs, cur = [], {"name": "INTRO", "text": ""}
+    for l in s.split('\n'):
+        fd = None
+        for m in ms:
+            if f'[{m}]' in l: fd = m; break
+        if fd:
+            if cur["text"].strip(): secs.append(cur)
+            cur = {"name": fd, "text": re.sub(r'\[.*?\]', '', l).strip()}
+        else:
+            cl = re.sub(r'\[(PAUSE|SCENE CHANGE)\]', '', l).strip()
+            if cl: cur["text"] += " " + cl
+    if cur["text"].strip(): secs.append(cur)
+    return [s for s in secs if s["text"].strip()]
+
+
+def trim_script(script, max_words=MAX_LONG_WORDS):
+    """Trim script to max_words by cutting sections from the end."""
+    wc = len(script.split())
+    if wc <= max_words:
+        return script
+    print(f"  Script too long ({wc} words), trimming to {max_words}...")
+    sections = parse_sections(script)
+    result_sections = []
+    current_words = 0
+    for sec in sections:
+        sec_words = len(sec['text'].split())
+        if current_words + sec_words > max_words:
+            remaining = max_words - current_words
+            if remaining > 50:
+                words = sec['text'].split()[:remaining]
+                result_sections.append(f"[{sec['name']}] {' '.join(words)}")
+            break
+        result_sections.append(f"[{sec['name']}] {sec['text']}")
+        current_words += sec_words
+    result = "\n\n".join(result_sections)
+    if "[PAUSE]" not in result:
+        result += "\n\n[PAUSE] What do you think? Let us know in the comments."
+    final_wc = len(result.split())
+    print(f"  Trimmed to {final_wc} words (~{final_wc/150:.0f} min)")
+    return result
+
+
 def expand_script(script, target_words=TARGET_LONG_WORDS):
-    """Ask AI to expand a short script section by section to reach target word count."""
+    """Ask AI to expand a short script to reach target word count. Loops until target hit or 3 attempts."""
     current_wc = len(script.split())
     if current_wc >= target_words:
         return script
 
-    shortfall = target_words - current_wc
-    per_section = max(150, shortfall // 8)
+    for expand_attempt in range(3):
+        shortfall = target_words - current_wc
+        per_section = max(200, shortfall // 8)
 
-    print(f"  Expanding script from {current_wc} to ~{target_words} words...")
+        print(f"  Expansion attempt {expand_attempt+1}: {current_wc} -> {target_words} words...")
 
-    prompt = f"""You are expanding a true crime documentary script. The current script is only {current_wc} words but needs to be at least {target_words} words for a 20-25 minute video.
+        prompt = f"""You are expanding a true crime documentary script for a 25-minute YouTube video.
+The current script is only {current_wc} words but MUST be at least {target_words} words.
 
 EXPAND EACH SECTION by adding {per_section}+ words per section. Add:
-- More specific details, dates, names, locations
-- Witness quotes and testimony details
-- Step-by-step breakdowns of evidence and timelines
-- Psychological analysis and expert opinions
-- Geographic and historical context
-- Red herrings and false leads investigators followed
-- Media coverage and public reaction details
-- Family statements and impact on community
+- Specific dates, times, locations, full names of people and places
+- Direct quotes from witnesses, family members, and law enforcement
+- Step-by-step breakdowns of evidence collection and forensic analysis
+- Psychological profiles and expert opinions
+- Detailed timeline reconstructions with exact times
+- Red herrings and false leads that investigators pursued
+- Media coverage, public reaction, and community impact
+- Family statements, victim impact descriptions
+- Comparison to similar cases and historical context
+- Transition sentences between sections for smooth flow
 
-Keep ALL [SECTION] markers exactly as they are. Do NOT remove or skip any content. Only ADD to each section.
+Keep ALL [SECTION] markers exactly as they are. Do NOT remove or skip any existing content. Only ADD detail.
 
 Current script:
 {script}
 
-Write the COMPLETE expanded script with ALL sections. Do not stop early."""
+Write the COMPLETE expanded script now. Every section must be significantly longer."""
 
-    result = gen_with_fallback(prompt)
-    if result and len(result.split()) >= current_wc * 1.5:
-        new_wc = len(result.split())
-        print(f"  Expanded to {new_wc} words (~{new_wc/150:.0f} min)")
-        return result
+        result = gen_with_fallback(prompt)
+        if result:
+            new_wc = len(result.split())
+            # Check it has section markers (not garbage)
+            has_markers = any(f'[{m}]' in result for m in ['HOOK','INTRO','BACKGROUND','THE CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION'])
+            if new_wc >= current_wc * 1.3 and has_markers:
+                print(f"  Expanded to {new_wc} words (~{new_wc/150:.0f} min)")
+                script = result
+                current_wc = new_wc
+                if current_wc >= target_words:
+                    return script
+            else:
+                print(f"  Expansion result too short or malformed ({new_wc} words), retrying...")
+        else:
+            print(f"  Expansion AI call failed, retrying...")
+        time.sleep(2)
 
-    # If single expansion failed, try expanding section by section
-    print("  Full expansion failed, trying section-by-section...")
+    # If full expansion failed, try section-by-section
+    print("  Full expansion incomplete, trying section-by-section...")
     sections = parse_sections(script)
     expanded_sections = []
-
     for sec in sections:
-        sec_prompt = f"""Expand this true crime documentary section to at least {per_section + len(sec['text'].split())} words.
+        sec_wc = len(sec['text'].split())
+        target_sec_wc = max(sec_wc + 200, 400)
+        sec_prompt = f"""Expand this true crime documentary section from {sec_wc} words to at least {target_sec_wc} words.
 Add specific details, witness accounts, timeline details, evidence descriptions, and atmospheric narration.
 Keep the [{sec['name']}] marker. Do NOT remove any existing content, only ADD more detail.
 
 [{sec['name']}] {sec['text']}"""
-
         expanded = gen_with_fallback(sec_prompt)
-        if expanded and len(expanded.split()) > len(sec['text'].split()):
+        if expanded and len(expanded.split()) > sec_wc * 1.2:
             expanded_sections.append(expanded)
         else:
             expanded_sections.append(f"[{sec['name']}] {sec['text']}")
         time.sleep(1)
-
     combined = "\n\n".join(expanded_sections)
-    print(f"  Section-by-section expansion: {len(combined.split())} words (~{len(combined.split())/150:.0f} min)")
+    combined_wc = len(combined.split())
+    print(f"  Section expansion: {combined_wc} words (~{combined_wc/150:.0f} min)")
     return combined
 
 
-def gen_script(category):
-    # Try AI first with high word count requirement
-    for attempt in range(5):
-        prompt = f"""Write a LONG, DETAILED true crime documentary script about: {category}
+# ═══════════════════════════════════════════════════════════════
+# PREPARE MODULE
+# ═══════════════════════════════════════════════════════════════
 
-CRITICAL REQUIREMENTS:
-- You MUST write AT LEAST {TARGET_LONG_WORDS} words. This is for a 20-25 minute YouTube video.
-- Aim for {TARGET_LONG_WORDS} words minimum. Most successful true crime videos are 20+ minutes.
+def gen_script(category):
+    """Generate a long true crime script. LOOPS until we get MIN_LONG_WORDS or exhaust retries."""
+    best_script = None
+    best_wc = 0
+
+    for attempt in range(5):
+        prompt = f"""Write a FULL-LENGTH true crime documentary script about: {category}
+
+THIS IS FOR A 25-MINUTE YOUTUBE VIDEO. You MUST write AT LEAST {TARGET_LONG_WORDS} words.
+Most successful true crime channels produce 20-30 minute videos. This script must be equally long.
 
 STRUCTURE - Use EXACTLY these section markers:
-[HOOK] - Shocking opening that grabs attention in first 10 seconds (100+ words)
-[INTRO] - Overview of the case and why it matters (300+ words)
-[BACKGROUND] - Victim's life, setting, context (400+ words)
-[THE CRIME] - Detailed step-by-step account of what happened (500+ words)
-[INVESTIGATION] - Police work, evidence, dead ends, breakthroughs (500+ words)
-[SUSPECTS] - Each suspect with motive, opportunity, alibi details (400+ words)
-[RESOLUTION] - Outcome, verdict, current status (300+ words)
-[CONCLUSION] - Impact, legacy, lessons, unanswered questions (300+ words)
+[HOOK] - Shocking opening (150+ words) - Start with a terrifying fact, question, or revelation
+[INTRO] - Case overview and significance (400+ words) - Set the scene, explain why this case matters
+[BACKGROUND] - Victim profile and context (500+ words) - Who they were, their daily life, personality
+[THE CRIME] - Step-by-step account (600+ words) - Chronological detail, every known fact
+[INVESTIGATION] - Police work and evidence (600+ words) - Detectives, forensics, dead ends, breaks
+[SUSPECTS] - Each suspect detailed (500+ words) - Motive, opportunity, alibis, evidence for/against
+[RESOLUTION] - Outcome and current status (400+ words) - Trial, verdict, appeals, current status
+[CONCLUSION] - Legacy and unanswered questions (400+ words) - Impact, lessons, what remains unknown
 
-EACH SECTION MUST BE EXTREMELY DETAILED:
-- Include specific dates, times, locations, names
-- Describe evidence in detail (what was found, where, condition)
-- Include witness statements and testimony
-- Describe the emotional impact on families and communities
-- Include false leads and dead ends investigators followed
-- Add atmospheric, cinematic narration style
-- Use transition sentences between sections
+RETENTION TECHNIQUES - Include these throughout:
+- Every 3 minutes, add a hook: "But the worst was yet to come..." or "What they found would change everything..."
+- Foreshadow upcoming reveals: "Little did they know, the answer had been sitting in evidence for decades..."
+- Add cliffhangers before section breaks: "Then a witness came forward with a story that would break the case wide open..."
+- Include emotional moments: family reactions, community fear, victim impact
 
-End with [PAUSE] and a thought-provoking question that forces viewers to comment.
+End with [PAUSE] and a thought-provoking question.
 
 DO NOT use fictional names. Use only REAL well-known cases.
-DO NOT stop early or write "continued in next section". Write the COMPLETE script."""
+DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
 
         result = gen_with_fallback(prompt)
         if result:
             wc = len(result.split())
-            if wc >= MIN_LONG_WORDS:
-                print(f"  AI script: {wc} words (~{wc/150:.0f} min)")
-                # If still under target, try to expand
+            # Check for minimum section markers
+            markers = sum(1 for m in ['HOOK','INTRO','BACKGROUND','THE CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION'] if f'[{m}]' in result)
+            print(f"  AI attempt {attempt+1}: {wc} words, {markers}/8 sections")
+
+            if wc > best_wc:
+                best_script = result
+                best_wc = wc
+
+            if wc >= MIN_LONG_WORDS and markers >= 5:
+                print(f"  Accepted: {wc} words (~{wc/150:.0f} min)")
+                # Trim if too long, expand if too short
+                if wc > MAX_LONG_WORDS:
+                    return trim_script(result, MAX_LONG_WORDS)
                 if wc < TARGET_LONG_WORDS:
-                    result = expand_script(result, TARGET_LONG_WORDS)
-                    wc = len(result.split())
-                    print(f"  After expansion: {wc} words (~{wc/150:.0f} min)")
+                    return expand_script(result, TARGET_LONG_WORDS)
                 return result
-            print(f"  AI attempt {attempt+1}: too short ({wc} words, need {MIN_LONG_WORDS}+), retrying...")
+            else:
+                print(f"  Too short or missing sections, retrying...")
         time.sleep(2)
 
-    # All AI attempts failed - use OFFLINE template + combining
-    print("  AI failed. Using OFFLINE template + combining multiple templates...")
-    key = category if category in OFFLINE_SCRIPTS else random.choice(list(OFFLINE_SCRIPTS.keys()))
+    # All attempts failed to meet minimum - use best result + force expansion
+    if best_script and best_wc >= 800:
+        print(f"  Best AI result: {best_wc} words. Force-expanding...")
+        result = expand_script(best_script, TARGET_LONG_WORDS)
+        wc = len(result.split())
+        if wc >= MIN_LONG_WORDS:
+            return trim_script(result, MAX_LONG_WORDS)
+        # If still too short after expansion, combine with offline
+        print(f"  Still only {wc} words after expansion, combining with offline templates...")
+
+    # Offline fallback: combine ALL templates for maximum length
+    print("  Using combined offline templates...")
     keys = list(OFFLINE_SCRIPTS.keys())
-    # Combine 2-3 templates to get more words
-    combined = OFFLINE_SCRIPTS[key]["script"]
-    other_keys = [k for k in keys if k != key]
-    random.shuffle(other_keys)
-    for ok in other_keys[:2]:
-        combined += "\n\n" + OFFLINE_SCRIPTS[ok]["script"]
-
+    random.shuffle(keys)
+    combined = ""
+    for k in keys:
+        combined += OFFLINE_SCRIPTS[k]["script"] + "\n\n"
+    # Trim to max
+    combined = trim_script(combined, MAX_LONG_WORDS)
     wc = len(combined.split())
-    print(f"  Combined offline: {wc} words (~{wc/150:.0f} min)")
-
-    # Try to expand even the combined template
+    # Try to expand the combined template
     if wc < TARGET_LONG_WORDS:
         combined = expand_script(combined, TARGET_LONG_WORDS)
-        wc = len(combined.split())
-        print(f"  After offline expansion: {wc} words (~{wc/150:.0f} min)")
-
+        combined = trim_script(combined, MAX_LONG_WORDS)
     return combined
 
 
@@ -554,6 +629,12 @@ Write ALL in {lang_name}."""
 
 def translate(text, lang_code, lang_name):
     orig_wc = len(text.split())
+    # Cap input text to prevent translating a massive script
+    if orig_wc > MAX_LONG_WORDS:
+        text = trim_script(text, MAX_LONG_WORDS)
+        orig_wc = len(text.split())
+        print(f"  Capped input to {orig_wc} words before translation")
+
     prompt = f"""Translate this ENTIRE true crime script to {lang_name}.
 Keep [HOOK][INTRO][BACKGROUND][THE CRIME][INVESTIGATION][SUSPECTS][RESOLUTION][CONCLUSION][PAUSE] markers unchanged.
 Translate naturally and COMPLETELY. DO NOT skip, shorten, or summarize any sections.
@@ -565,12 +646,13 @@ The translation MUST be at least {orig_wc} words long - translate every single s
         print(f"  Translation failed, keeping original ({orig_wc} words)")
         return text
     result_wc = len(result.split())
-    if result_wc < orig_wc * 0.4:
+    if result_wc < orig_wc * 0.5:
         print(f"  Translation too short ({result_wc} vs {orig_wc} original), keeping original")
         return text
     if result_wc < orig_wc * 0.7:
-        print(f"  WARNING: Translation shorter than original ({result_wc} vs {orig_wc}), but proceeding")
-    print(f"  Translation: {result_wc} words (original: {orig_wc})")
+        print(f"  WARNING: Translation shorter ({result_wc} vs {orig_wc}), but proceeding")
+    else:
+        print(f"  Translation: {result_wc} words (original: {orig_wc})")
     return result
 
 
@@ -582,9 +664,13 @@ def run_prepare():
     print(f"Category: {ct}")
     print("\n[1/2] Generating long script...")
     ls = gen_script(ct)
+    # Final safety: trim if too long
+    ls = trim_script(ls, MAX_LONG_WORDS)
     wt = extract_title(ls)
     lwc = len(ls.split())
     print(f"  Title: {wt} | Words: {lwc} (~{lwc/150:.0f} min)")
+    if lwc < MIN_LONG_WORDS:
+        print(f"  WARNING: Final script still under {MIN_LONG_WORDS} words!")
     with open(os.path.join(OUT, "scripts", "long_en.txt"), "w", encoding="utf-8") as f:
         f.write(ls)
     print("\n[2/2] Generating short script...")
@@ -593,7 +679,7 @@ def run_prepare():
     print(f"  Words: {swc}")
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w", encoding="utf-8") as f:
         f.write(ss)
-    # Always include BUILD_LANGS (must match matrix in auto.yml), then add rotating extras
+    # Always include BUILD_LANGS, then add rotating extras
     sel = list(BUILD_LANGS)
     if "en" not in sel:
         sel.insert(0, "en")
@@ -799,23 +885,6 @@ def get_dur(p):
     except: return 60.0
 
 
-def parse_sections(s):
-    ms = ['HOOK','INTRO','BACKGROUND','THE CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION']
-    secs, cur = [], {"name": "INTRO", "text": ""}
-    for l in s.split('\n'):
-        fd = None
-        for m in ms:
-            if f'[{m}]' in l: fd = m; break
-        if fd:
-            if cur["text"].strip(): secs.append(cur)
-            cur = {"name": fd, "text": re.sub(r'\[.*?\]', '', l).strip()}
-        else:
-            cl = re.sub(r'\[(PAUSE|SCENE CHANGE)\]', '', l).strip()
-            if cl: cur["text"] += " " + cl
-    if cur["text"].strip(): secs.append(cur)
-    return [s for s in secs if s["text"].strip()]
-
-
 def calc_times(secs, dur):
     tw = sum(len(s["text"].split()) for s in secs)
     if tw == 0: return []
@@ -963,7 +1032,6 @@ def slide_sub(op, w, h, fonts):
 
 def gen_atmospheric_music(dur, op):
     d = int(dur)+10
-    # Attempt 1: Full atmospheric with echo, filters
     try:
         fc = ("[0]volume=0.20[a];[1]volume=0.08[b1];[2]volume=0.06[b2];[3]volume=0.07[b3];"
               "[b1][b2]amix=inputs=2:duration=longest[b12];[b12][b3]amix=inputs=2:duration=longest[b];"
@@ -981,37 +1049,31 @@ def gen_atmospheric_music(dur, op):
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 1000:
             return True
-        print(f"    Music attempt 1 failed: {(r.stderr or '')[:200]}")
-    except Exception as e:
-        print(f"    Music attempt 1 error: {e}")
-    # Attempt 2: Simpler 2-tone with basic filter
+    except: pass
     try:
         fc2 = "[0]volume=0.20[a];[1]volume=0.10[b];[a][b]amix=inputs=2:duration=longest,lowpass=f=400,volume=0.12[out]"
         cmd2 = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=55:duration={d}",
                 "-f","lavfi","-i",f"sine=frequency=82.41:duration={d}",
                 "-filter_complex",fc2,"-map","[out]","-c:a","aac","-b:a","64k",op]
         r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
-        if r2.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 1000:
+        if r2.returncode == 0 and os.path.exists(op) and os2.getsize(op) > 1000:
             return True
-        print(f"    Music attempt 2 failed: {(r2.stderr or '')[:200]}")
-    except Exception as e:
-        print(f"    Music attempt 2 error: {e}")
-    # Attempt 3: Single sine tone - absolute simplest
+    except: pass
     try:
         cmd3 = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=65:duration={d}",
                 "-af","lowpass=f=300,volume=0.08","-c:a","aac","-b:a","48k",op]
         r3 = subprocess.run(cmd3, capture_output=True, text=True, timeout=30)
         if r3.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 500:
             return True
-        print(f"    Music attempt 3 failed: {(r3.stderr or '')[:200]}")
-    except Exception as e:
-        print(f"    Music attempt 3 error: {e}")
+    except: pass
     print("    WARNING: Music generation failed, continuing without music")
     return False
 
 
-def _ffmpeg_run(cmd, label="ffmpeg", timeout=600):
-    """Run FFmpeg with proper error logging."""
+def _ffmpeg_run(cmd, label="ffmpeg", timeout=None):
+    if timeout is None:
+        timeout = 2400
+    print(f"    {label}: timeout={timeout}s")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         err = (r.stderr or "")[:500]
@@ -1033,8 +1095,10 @@ def render_video(imgs, ap, srt_path, op, short=False):
         secs = parse_sections(script); timings = calc_times(secs, adur)
     else:
         timings = [{"name":"MAIN","start":0,"duration":adur,"text":""}]
-    slides = []; slen = 8.0 if short else 15.0  # Shorter slides = more variety in long videos
-    slides.append(("section","TRUE CRIME",4.0)); ii = 0
+
+    slen = 8.0 if short else 20.0
+    slides = []; ii = 0
+    slides.append(("section","TRUE CRIME",4.0))
     for t in timings:
         sd = t["duration"]; dn = SEC_TITLES.get(t["name"],"")
         if dn: slides.append(("section",dn,4.5)); sd -= 4.5
@@ -1054,6 +1118,9 @@ def render_video(imgs, ap, srt_path, op, short=False):
     total = sum(s[2] for s in slides)
     if total > 0 and abs(total-adur) > 2:
         ratio = adur/total; slides = [(s[0],s[1],s[2]*ratio) for s in slides]
+
+    print(f"    Total slides: {len(slides)}, target duration: {adur:.0f}s ({adur/60:.1f} min)")
+
     spaths = []
     for i, (st, data, dur) in enumerate(slides):
         s = os.path.join(TEMP, f"s_{i:04d}.jpg")
@@ -1076,7 +1143,7 @@ def render_video(imgs, ap, srt_path, op, short=False):
         for i in range(5):
             s = os.path.join(TEMP, f"s_emergency_{i:04d}.jpg")
             dark_bg_rich(w,h).save(s, quality=95); spaths.append(s)
-    # Write concat demuxer file with absolute paths
+
     cl = os.path.join(TEMP, "slides.txt")
     with open(cl, "w") as f:
         for i, (_, _, dur) in enumerate(slides):
@@ -1086,135 +1153,129 @@ def render_video(imgs, ap, srt_path, op, short=False):
         if spaths:
             p = os.path.abspath(spaths[-1])
             f.write(f"file '{p}'\n")
-    # Generate background music
+
     mp = os.path.join(TEMP, "music.mp3")
     print(f"    Generating music...")
     hm = gen_atmospheric_music(adur, mp)
-    # Validate music file
     if hm and (not os.path.exists(mp) or os.path.getsize(mp) < 500):
-        print("    WARNING: Music file invalid, skipping music")
-        hm = False
-    # Build subtitle force_style with escaped commas for FFmpeg filter parser
+        print("    WARNING: Music file invalid, skipping music"); hm = False
+
+    use_preset = PRESET
+    use_crf = CRF
+    use_fps = FPS
+    encode_timeout = min(3600, max(600, int(adur * 1.5)))
+
     fs_size = 18 if short else 22
     force_style = (f"FontSize={fs_size}\\,PrimaryColour=&H00FFFFFF\\,OutlineColour=&H80000000\\,"
                    f"BackColour=&H80000000\\,Outline=2\\,Shadow=1\\,MarginV=35")
     has_subs = srt_path and os.path.exists(srt_path) and os.path.getsize(srt_path) > 50
+
+    print(f"    Encoding: preset={use_preset}, crf={use_crf}, fps={use_fps}, timeout={encode_timeout}s")
 
     # === ATTEMPT 1: Full render with subtitles + music ===
     if has_subs and hm:
         try:
             srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
             srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
-            fc = (f"[0:v]fps={FPS},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
+            fc = (f"[0:v]fps={use_fps},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
                   f"[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]")
             inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp]
             cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                    "-c:v",CODEC,"-preset",PRESET,"-crf",str(CRF),"-c:a","aac","-b:a","192k",
+                    "-c:v",CODEC,"-preset",use_preset,"-crf",str(use_crf),"-c:a","aac","-b:a","128k",
                     "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
-            r = _ffmpeg_run(cmd, "render+subs+music")
+            r = _ffmpeg_run(cmd, "render+subs+music", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-                print("    Render: subtitles + music OK")
-                return
+                print("    Render: subtitles + music OK"); return
             if os.path.exists(op): os.remove(op)
-            print("    Attempt 1 (subs+music) failed, trying next...")
+            print("    Attempt 1 failed, trying next...")
         except Exception as e:
             print(f"    Attempt 1 error: {e}")
             try:
                 if os.path.exists(op): os.remove(op)
-            except:
-                pass
+            except: pass
 
-    # === ATTEMPT 2: Subtitles only (no music) ===
+    # === ATTEMPT 2: Subtitles only ===
     if has_subs:
         try:
             srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
             srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
-            fc = (f"[0:v]fps={FPS},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
+            fc = (f"[0:v]fps={use_fps},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
                   f"[1:a]acopy[a]")
             inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
             cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                    "-c:v",CODEC,"-preset",PRESET,"-crf",str(CRF),"-c:a","aac","-b:a","192k",
+                    "-c:v",CODEC,"-preset",use_preset,"-crf",str(use_crf),"-c:a","aac","-b:a","128k",
                     "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
-            r = _ffmpeg_run(cmd, "render+subs")
+            r = _ffmpeg_run(cmd, "render+subs", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-                print("    Render: subtitles only OK")
-                return
+                print("    Render: subtitles only OK"); return
             if os.path.exists(op): os.remove(op)
-            print("    Attempt 2 (subs only) failed, trying next...")
+            print("    Attempt 2 failed, trying next...")
         except Exception as e:
             print(f"    Attempt 2 error: {e}")
             try:
                 if os.path.exists(op): os.remove(op)
-            except:
-                pass
+            except: pass
 
-    # === ATTEMPT 3: Music only (no subtitles) ===
+    # === ATTEMPT 3: Music only ===
     if hm:
         try:
-            fc = f"[0:v]fps={FPS},format=yuv420p[v];[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]"
+            fc = f"[0:v]fps={use_fps},format=yuv420p[v];[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]"
             inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp]
             cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                    "-c:v",CODEC,"-preset",PRESET,"-crf",str(CRF),"-c:a","aac","-b:a","192k",
+                    "-c:v",CODEC,"-preset",use_preset,"-crf",str(use_crf),"-c:a","aac","-b:a","128k",
                     "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
-            r = _ffmpeg_run(cmd, "render+music")
+            r = _ffmpeg_run(cmd, "render+music", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-                print("    Render: music only OK")
-                return
+                print("    Render: music only OK"); return
             if os.path.exists(op): os.remove(op)
-            print("    Attempt 3 (music only) failed, trying next...")
+            print("    Attempt 3 failed, trying next...")
         except Exception as e:
             print(f"    Attempt 3 error: {e}")
             try:
                 if os.path.exists(op): os.remove(op)
-            except:
-                pass
+            except: pass
 
-    # === ATTEMPT 4: Simple video + audio, no effects ===
+    # === ATTEMPT 4: Simple ===
     try:
-        fc = f"[0:v]fps={FPS},format=yuv420p[v];[1:a]acopy[a]"
+        fc = f"[0:v]fps={use_fps},format=yuv420p[v];[1:a]acopy[a]"
         inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
         cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                "-c:v",CODEC,"-preset","fast","-crf","23","-c:a","aac","-b:a","128k",
+                "-c:v",CODEC,"-preset","ultrafast","-crf","28","-c:a","aac","-b:a","128k",
                 "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
-        r = _ffmpeg_run(cmd, "render-simple")
+        r = _ffmpeg_run(cmd, "render-simple", encode_timeout)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-            print("    Render: simple (no effects) OK")
-            return
+            print("    Render: simple OK"); return
         if os.path.exists(op): os.remove(op)
-        print("    Attempt 4 (simple) failed, trying final fallback...")
     except Exception as e:
         print(f"    Attempt 4 error: {e}")
         try:
             if os.path.exists(op): os.remove(op)
-        except:
-            pass
+        except: pass
 
-    # === ATTEMPT 5: Absolute minimal - no filter_complex at all ===
+    # === ATTEMPT 5: Minimal ===
     try:
         base_video = os.path.join(TEMP, "base_video.mp4")
         cmd_slides = (["ffmpeg","-y","-f","concat","-safe","0","-i",cl,
-                        "-vf",f"fps={FPS},format=yuv420p",
+                        "-vf",f"fps={use_fps},format=yuv420p",
                         "-c:v",CODEC,"-preset","ultrafast","-crf","28",
                         "-pix_fmt","yuv420p","-an",base_video])
-        r = _ffmpeg_run(cmd_slides, "render-slides-only")
+        r = _ffmpeg_run(cmd_slides, "render-slides", encode_timeout)
         if r.returncode != 0 or not os.path.exists(base_video) or os.path.getsize(base_video) < 5000:
             raise Exception("Slide video creation failed")
         cmd_mux = (["ffmpeg","-y","-i",base_video,"-i",ap,
                      "-c:v","copy","-c:a","aac","-b:a","128k",
                      "-shortest","-movflags","+faststart",op])
-        r = _ffmpeg_run(cmd_mux, "render-mux-audio")
+        r = _ffmpeg_run(cmd_mux, "render-mux", 300)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-            print("    Render: minimal mux OK")
-            return
+            print("    Render: minimal mux OK"); return
         if os.path.exists(op): os.remove(op)
     except Exception as e:
         print(f"    Attempt 5 error: {e}")
         try:
             if os.path.exists(op): os.remove(op)
-        except:
-            pass
+        except: pass
 
-    raise Exception("Video encoding failed after all 5 attempts. Check FFmpeg installation and logs above.")
+    raise Exception("Video encoding failed after all 5 attempts.")
 
 
 def make_thumb(title, imgs, op, short=False):
@@ -1261,37 +1322,46 @@ def run_build():
     sp = os.path.join(OUT, "scripts", f"{kind}_{lc}.txt")
     if not os.path.exists(sp): print("SKIP: no script"); sys.exit(1)
     with open(sp, "r", encoding="utf-8") as f: raw = f.read()
+
+    # For long videos: ensure word count is in range
+    if not iss:
+        wc = len(raw.split())
+        print(f"  Script word count: {wc} (~{wc/150:.0f} min)")
+        # Trim if too long
+        if wc > MAX_LONG_WORDS:
+            raw = trim_script(raw, MAX_LONG_WORDS)
+            with open(sp, "w", encoding="utf-8") as f: f.write(raw)
+            wc = len(raw.split())
+            print(f"  Trimmed to {wc} words (~{wc/150:.0f} min)")
+        # Expand if too short
+        if wc < MIN_LONG_WORDS:
+            print(f"  Script too short ({wc} words), expanding...")
+            expanded = expand_script(raw, TARGET_LONG_WORDS)
+            expanded = trim_script(expanded, MAX_LONG_WORDS)
+            with open(sp, "w", encoding="utf-8") as f: f.write(expanded)
+            raw = expanded
+            wc = len(raw.split())
+            print(f"  After expansion: {wc} words (~{wc/150:.0f} min)")
+
     clean = clean_text(raw); wc = len(clean.split())
-    # Minimum word requirements
-    min_w = 80 if iss else MIN_LONG_WORDS
-    target_w = 150 if iss else TARGET_LONG_WORDS
-    est_min = wc / 150
-    if wc < min_w:
-        print(f"SKIP: too short ({wc} words, need {min_w})")
+    if not iss and wc < MIN_LONG_WORDS:
+        print(f"SKIP: script still too short after expansion ({wc} words)")
         sys.exit(1)
-    if wc < target_w and not iss:
-        print(f"  WARNING: script is short ({wc} words, ~{est_min:.0f} min, target ~{target_w/150:.0f} min)")
-        # Try to expand the script before building
-        print("  Attempting to expand script...")
-        expanded = expand_script(raw, TARGET_LONG_WORDS)
-        exp_wc = len(expanded.split())
-        if exp_wc > wc * 1.3:  # At least 30% expansion
-            with open(sp, "w", encoding="utf-8") as f:
-                f.write(expanded)
-            clean = clean_text(expanded)
-            wc = exp_wc
-            print(f"  Script expanded to {wc} words (~{wc/150:.0f} min)")
-        else:
-            print(f"  Expansion didn't help enough, building with {wc} words (~{est_min:.0f} min)")
+
     print(f"Building {LANGUAGES[lc]['name']} {kind} ({wc} words, ~{wc/150:.0f} min)...")
     ap = os.path.join(OUT, f"audio_{kind}_{lc}.mp3")
     vtt_path = os.path.join(OUT, f"subs_{kind}_{lc}.vtt")
     ok = asyncio.run(gen_tts(clean, lc, kind, ap, vtt_path))
     if not ok or not os.path.exists(ap) or os.path.getsize(ap) < 1000:
         print("FAIL: TTS failed"); sys.exit(1)
-    adur = get_dur(ap); min_dur = 10.0 if iss else 300.0  # 5 min minimum for long
+    adur = get_dur(ap)
+    min_dur = 10.0 if iss else 900.0   # 15 min minimum for long
+    max_dur = 120.0 if iss else 2400.0  # 40 min max for long
     if adur < min_dur:
         print(f"SKIP: audio too short ({adur:.0f}s / {adur/60:.1f} min, need {min_dur/60:.0f} min)")
+        sys.exit(1)
+    if adur > max_dur:
+        print(f"SKIP: audio too long ({adur:.0f}s / {adur/60:.1f} min, max {max_dur/60:.0f} min)")
         sys.exit(1)
     print(f"  Audio duration: {adur:.0f}s ({adur/60:.1f} min)")
     srt_path = vtt_to_srt(vtt_path)
@@ -1307,7 +1377,7 @@ def run_build():
     try: render_video(imgs, ap, srt_path, vp, iss)
     except Exception as e: print(f"FAIL: render error: {e}"); sys.exit(1)
     if not os.path.exists(vp): sys.exit(1)
-    vd = get_dur(vp); md = 10.0 if iss else 300.0  # 5 min minimum for long
+    vd = get_dur(vp); md = 10.0 if iss else 900.0
     if vd < md:
         try: os.remove(vp)
         except: pass
@@ -1460,11 +1530,9 @@ def upload_video(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
                 yt = get_yt_service()
             else: raise Exception(f"Upload failed 3x: {str(e)[:200]}")
     if not vid: raise Exception("Upload failed - no video ID")
-    # Thumbnail
     if tp and os.path.exists(tp) and os.path.getsize(tp) > 5000:
         try: yt.thumbnails().set(videoId=vid, media_body=googleapiclient.http.MediaFileUpload(tp)).execute(); print("  Thumbnail set")
         except: pass
-    # Playlist
     try:
         pl_title = f"{'Shorts - ' if short else ''}True Crime - {LANGUAGES[lc]['name']}"
         playlists = yt.playlists().list(part="snippet", mine=True, maxResults=50).execute()
@@ -1480,7 +1548,6 @@ def upload_video(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
             "snippet": {"playlistId": pid, "resourceId": {"kind": "youtube#video", "videoId": vid}}}).execute()
         print("  Added to playlist")
     except: pass
-    # Pinned comment
     if pinned_comment and len(pinned_comment.strip()) >= 5:
         try:
             pc = pinned_comment.replace('<','').replace('>','').replace('&','and')[:500]
@@ -1488,7 +1555,6 @@ def upload_video(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
                 "snippet": {"videoId": vid, "topLevelComment": {"snippet": {"textOriginal": pc}}}}).execute()
             print("  Pinned comment posted")
         except: pass
-    # Log
     os.makedirs(ANALYTICS, exist_ok=True)
     with open(os.path.join(ANALYTICS, "uploads.jsonl"), "a") as f:
         f.write(json.dumps({"video_id": vid, "lang": lc, "type": "short" if short else "long",
