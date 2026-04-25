@@ -1311,6 +1311,16 @@ def run_build():
             raw = expanded
             wc = len(raw.split())
             print(f"  After expansion: {wc} words (~{wc/150:.0f} min)")
+    else:
+        # SHORT: Cap word count to prevent 10+ minute "shorts"
+        wc = len(raw.split())
+        print(f"  Short script word count: {wc}")
+        if wc > MAX_SHORT_WORDS:
+            print(f"  Short too long ({wc} words), trimming to {MAX_SHORT_WORDS}...")
+            raw = trim_short_script(raw, MAX_SHORT_WORDS)
+            with open(sp, "w", encoding="utf-8") as f: f.write(raw)
+            wc = len(raw.split())
+            print(f"  Short trimmed to {wc} words")
     clean = clean_text(raw); wc = len(clean.split())
     if not iss and wc < MIN_LONG_WORDS:
         print(f"SKIP: script still too short after expansion ({wc} words)")
