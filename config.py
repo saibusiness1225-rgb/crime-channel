@@ -17,18 +17,19 @@ LANGUAGES = {
 # ═══════════════════════════════════════════════════════════════
 # VIDEO LENGTH TARGETS
 # ═══════════════════════════════════════════════════════════════
-TARGET_LONG_WORDS = 3500   # Target word count for 20-25 min videos (~150 wpm)
-MIN_LONG_WORDS = 1500      # Absolute minimum for long videos (~10 min)
+TARGET_LONG_WORDS = 3800   # Target word count for 25+ min videos (~150 wpm)
+MIN_LONG_WORDS = 2500      # Absolute minimum - NEVER accept less (~17 min)
+MAX_LONG_WORDS = 5000      # Hard cap - ~33 min max
 
 # ═══════════════════════════════════════════════════════════════
 # VIDEO QUALITY
 # ═══════════════════════════════════════════════════════════════
 VIDEO_W, VIDEO_H = 1920, 1080
 SHORT_W, SHORT_H = 1080, 1920
-FPS = 30
+FPS = 24
 CODEC = "libx264"
-PRESET = "medium"
-CRF = 20
+PRESET = "ultrafast"
+CRF = 28
 
 # ═══════════════════════════════════════════════════════════════
 # IMAGE SETTINGS
@@ -52,7 +53,7 @@ IMAGES_PER_SHORT = 8
 # ═══════════════════════════════════════════════════════════════
 YT_CATEGORY = "24"  # Entertainment
 LANGS_PER_RUN = 3
-BUILD_LANGS = ["en", "es", "hi"]  # Must match matrix in auto.yml
+BUILD_LANGS = ["en", "es", "hi"]
 
 # ═══════════════════════════════════════════════════════════════
 # SCHEDULING
@@ -116,8 +117,8 @@ THUMB_WIDTH = 1280
 THUMB_HEIGHT = 720
 THUMB_QUALITY = 98
 THUMB_STYLE = "cinematic"
-THUMB_FONT_COLOR = (255, 255, 0)       # Yellow = highest CTR
-THUMB_ACCENT_COLOR = (196, 30, 58)     # Crime red
+THUMB_FONT_COLOR = (255, 255, 0)
+THUMB_ACCENT_COLOR = (196, 30, 58)
 THUMB_GLOW_EFFECT = True
 THUMB_EMOTION_WORDS = ["SHOCKING", "UNSEEN", "EXPOSED", "HIDDEN", "DARK", "CHILLING", "TERRIFYING"]
 
@@ -143,7 +144,7 @@ POST_COMMUNITY_POLL = True
 # ═══════════════════════════════════════════════════════════════
 WORK = os.environ.get("GITHUB_WORKSPACE", "/tmp/crime")
 OUT  = os.path.join(WORK, "output")
-IMGS = os.path.join(OUT, "images")       # Inside output/ so artifacts carry images
+IMGS = os.path.join(OUT, "images")
 TEMP = os.path.join(OUT, "temp")
 ANALYTICS = os.path.join(OUT, "analytics")
 
