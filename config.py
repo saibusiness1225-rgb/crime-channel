@@ -52,8 +52,8 @@ IMAGES_PER_SHORT = 8
 # YOUTUBE SETTINGS
 # ═══════════════════════════════════════════════════════════════
 YT_CATEGORY = "24"
-LANGS_PER_RUN = 8
-BUILD_LANGS = ["en", "es", "hi", "fr", "pt", "de", "ja", "ar"]
+LANGS_PER_RUN = 4                    # 4 languages per batch
+BUILD_LANGS = ["en", "es", "hi", "fr", "pt", "de", "ja", "ar"]  # all 8 available
 
 # ═══════════════════════════════════════════════════════════════
 # SCHEDULING
