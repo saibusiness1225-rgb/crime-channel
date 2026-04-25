@@ -653,15 +653,21 @@ def run_prepare():
     print(f"  Words: {swc}")
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w", encoding="utf-8") as f:
         f.write(ss)
-    sel = list(BUILD_LANGS)
-    if "en" not in sel:
-        sel.insert(0, "en")
-    ac = list(LANGUAGES.keys())
-    d = datetime.date.today().toordinal()
-    while len(sel) < LANGS_PER_RUN:
-        extra = ac[(d + len(sel)) % len(ac)]
-        if extra not in sel:
-            sel.append(extra)
+        # Check for BATCH_LANGS env var (set by workflow)
+    batch = os.environ.get("BATCH_LANGS", "").strip()
+    if batch:
+        sel = [c.strip() for c in batch.split(",") if c.strip() in LANGUAGES]
+        print(f"  BATCH_LANGS override: {sel}")
+    else:
+        sel = list(BUILD_LANGS)
+        if "en" not in sel:
+            sel.insert(0, "en")
+        ac = list(LANGUAGES.keys())
+        d = datetime.date.today().toordinal()
+        while len(sel) < LANGS_PER_RUN:
+            extra = ac[(d + len(sel)) % len(ac)]
+            if extra not in sel:
+                sel.append(extra)
     print(f"\nLanguages: {[LANGUAGES[c]['name'] for c in sel]}")
     am = {}
     for code in sel:
