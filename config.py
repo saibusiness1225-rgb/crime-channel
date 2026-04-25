@@ -22,7 +22,7 @@ MIN_LONG_WORDS = 2500      # Absolute minimum (~17 min)
 MAX_LONG_WORDS = 5000      # Hard cap (~33 min)
 
 TARGET_SHORT_WORDS = 180   # Target for 60-90 second shorts
-MAX_SHORT_WORDS = 250      # Hard cap for shorts (~1.5 min max)
+MAX_SHORT_WORDS = 350      # Hard cap for shorts (~1.5 min max)
 
 # ═══════════════════════════════════════════════════════════════
 # VIDEO QUALITY
