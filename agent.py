@@ -186,33 +186,6 @@ OFFLINE_SHORTS = {
     },
 }
 
-def trim_short_script(script, max_words=MAX_SHORT_WORDS):
-    """Trim short script to max_words, keeping hook and conclusion."""
-    wc = len(script.split())
-    if wc <= max_words:
-        return script
-    print(f"  Short script too long ({wc} words), trimming to {max_words}...")
-    lines = script.split('\n')
-    result = []
-    in_crime = False
-    crime_words = 0
-    for line in lines:
-        if '[HOOK]' in line or '[CONCLUSION]' in line or '[PAUSE]' in line:
-            in_crime = False
-            result.append(line)
-        elif '[THE CRIME]' in line:
-            in_crime = True
-            result.append(line)
-        elif in_crime:
-            crime_words += len(line.split())
-            if crime_words <= max_words - 80:
-                result.append(line)
-        else:
-            result.append(line)
-    trimmed = '\n'.join(result)
-    final_wc = len(trimmed.split())
-    print(f"  Short trimmed to {final_wc} words")
-    return trimmed
 
 # ═══════════════════════════════════════════════════════════════
 # AI PROVIDERS
@@ -418,6 +391,34 @@ def trim_script(script, max_words=MAX_LONG_WORDS):
     final_wc = len(result.split())
     print(f"  Trimmed to {final_wc} words (~{final_wc/150:.0f} min)")
     return result
+  
+ def trim_short_script(script, max_words=MAX_SHORT_WORDS):
+    """Trim short script to max_words, keeping hook and conclusion."""
+    wc = len(script.split())
+    if wc <= max_words:
+        return script
+    print(f"  Short script too long ({wc} words), trimming to {max_words}...")
+    lines = script.split('\n')
+    result = []
+    in_crime = False
+    crime_words = 0
+    for line in lines:
+        if '[HOOK]' in line or '[CONCLUSION]' in line or '[PAUSE]' in line:
+            in_crime = False
+            result.append(line)
+        elif '[THE CRIME]' in line:
+            in_crime = True
+            result.append(line)
+        elif in_crime:
+            crime_words += len(line.split())
+            if crime_words <= max_words - 80:
+                result.append(line)
+        else:
+            result.append(line)
+    trimmed = '\n'.join(result)
+    final_wc = len(trimmed.split())
+    print(f"  Short trimmed to {final_wc} words")
+    return trimmed
 
 
 def expand_script(script, target_words=TARGET_LONG_WORDS):
