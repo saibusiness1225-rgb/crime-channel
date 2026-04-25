@@ -21,6 +21,9 @@ TARGET_LONG_WORDS = 3800   # Target for 25+ min videos (~150 wpm)
 MIN_LONG_WORDS = 2500      # Absolute minimum (~17 min)
 MAX_LONG_WORDS = 5000      # Hard cap (~33 min)
 
+TARGET_SHORT_WORDS = 180   # Target for 60-90 second shorts
+MAX_SHORT_WORDS = 250      # Hard cap for shorts (~1.5 min max)
+
 # ═══════════════════════════════════════════════════════════════
 # VIDEO QUALITY
 # ═══════════════════════════════════════════════════════════════
@@ -52,8 +55,8 @@ IMAGES_PER_SHORT = 8
 # YOUTUBE SETTINGS
 # ═══════════════════════════════════════════════════════════════
 YT_CATEGORY = "24"
-LANGS_PER_RUN = 4                    # 4 languages per batch
-BUILD_LANGS = ["en", "es", "hi", "fr", "pt", "de", "ja", "ar"]  # all 8 available
+LANGS_PER_RUN = 4
+BUILD_LANGS = ["en", "es", "hi", "fr", "pt", "de", "ja", "ar"]
 
 # ═══════════════════════════════════════════════════════════════
 # SCHEDULING
