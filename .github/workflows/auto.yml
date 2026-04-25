@@ -1,22 +1,15 @@
-name: Crime Auto
+name: Crime Batch B
 
 on:
   schedule:
-    - cron: '0 6 * * *'
-    - cron: '0 12 * * *'
-    - cron: '0 17 * * *'
-    - cron: '0 22 * * *'
+    - cron: '0 12 * * *'   # 12 PM UTC
+    - cron: '0 22 * * *'   # 10 PM UTC
   workflow_dispatch:
-    inputs:
-      lang:
-        description: 'Language code (en, es, hi, fr, pt, de, ja, ar)'
-        required: false
-        default: 'en'
 
 jobs:
   prepare:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -28,6 +21,7 @@ jobs:
         env:
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          BATCH_LANGS: "pt,de,ja,ar"
       - uses: actions/upload-artifact@v4
         with:
           name: output
@@ -36,7 +30,7 @@ jobs:
   download:
     needs: prepare
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -62,7 +56,7 @@ jobs:
     timeout-minutes: 45
     strategy:
       matrix:
-        lang: [en, es, hi, fr, pt, de, ja, ar]
+        lang: [pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -88,10 +82,10 @@ jobs:
   build-short:
     needs: download
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     strategy:
       matrix:
-        lang: [en, es, hi, fr, pt, de, ja, ar]
+        lang: [pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -117,10 +111,10 @@ jobs:
   upload-long:
     needs: build-long
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 25
     strategy:
       matrix:
-        lang: [en, es, hi, fr, pt, de, ja, ar]
+        lang: [pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -148,10 +142,10 @@ jobs:
   upload-short:
     needs: build-short
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     strategy:
       matrix:
-        lang: [en, es, hi, fr, pt, de, ja, ar]
+        lang: [pt, de, ja, ar]
       fail-fast: false
     steps:
       - uses: actions/checkout@v4
@@ -169,4 +163,59 @@ jobs:
           VIDEO_TYPE: short
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.Y
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: uploaded-short-${{ matrix.lang }}
+          path: output
+
+  comment-reply:
+    needs: [upload-long, upload-short]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: uploaded-long-pt
+          path: output
+        continue-on-error: true
+      - run: python agent.py comment
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+
+  ab-test:
+    needs: [upload-long, upload-short]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    if: always()
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install -r requirements.txt
+      - uses: actions/download-artifact@v4
+        with:
+          name: uploaded-long-pt
+          path: output
+        continue-on-error: true
+      - run: python agent.py abtest
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      - run: python agent.py analytics
+        env:
+          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
