@@ -391,8 +391,9 @@ def trim_script(script, max_words=MAX_LONG_WORDS):
     final_wc = len(result.split())
     print(f"  Trimmed to {final_wc} words (~{final_wc/150:.0f} min)")
     return result
-  
- def trim_short_script(script, max_words=MAX_SHORT_WORDS):
+
+
+def trim_short_script(script, max_words=MAX_SHORT_WORDS):
     """Trim short script to max_words, keeping hook and conclusion."""
     wc = len(script.split())
     if wc <= max_words:
@@ -681,7 +682,6 @@ def run_prepare():
     print(f"  Words: {swc}")
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w", encoding="utf-8") as f:
         f.write(ss)
-        # Check for BATCH_LANGS env var (set by workflow)
     batch = os.environ.get("BATCH_LANGS", "").strip()
     if batch:
         sel = [c.strip() for c in batch.split(",") if c.strip() in LANGUAGES]
@@ -1340,7 +1340,6 @@ def run_build():
             wc = len(raw.split())
             print(f"  After expansion: {wc} words (~{wc/150:.0f} min)")
     else:
-        # SHORT: Cap word count to prevent 10+ minute "shorts"
         wc = len(raw.split())
         print(f"  Short script word count: {wc}")
         if wc > MAX_SHORT_WORDS:
