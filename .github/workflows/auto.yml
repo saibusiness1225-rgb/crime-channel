@@ -1,221 +1,113 @@
-name: Crime Batch B
+name: 🎬 Crime Channel Automation
 
 on:
+  # Run automatically every day at 06:00 UTC
   schedule:
-    - cron: '0 12 * * *'   # 12 PM UTC
-    - cron: '0 22 * * *'   # 10 PM UTC
+    - cron: '0 6 * * *'
+  
+  # Allow manual runs from GitHub UI
   workflow_dispatch:
+    inputs:
+      langs:
+        description: 'Comma-separated languages (e.g. pt,de,ja,ar)'
+        required: false
+        default: 'pt,de,ja,ar'
 
 jobs:
-  prepare:
+  build_and_upload:
     runs-on: ubuntu-latest
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
-      - run: python agent.py prepare
-        env:
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-          BATCH_LANGS: "pt,de,ja,ar"
-      - uses: actions/upload-artifact@v4
-        with:
-          name: output
-          path: output
+    timeout-minutes: 180 # Kill whole workflow if stuck for 3 hours
+    
+    env:
+      # These are pulled from GitHub Secrets (Settings -> Secrets and variables -> Actions)
+      GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+      YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
+      YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
+      YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+      
+      # Pass the selected languages to the prepare script
+      BATCH_LANGS: ${{ inputs.langs || 'pt,de,ja,ar' }}
 
-  download:
-    needs: prepare
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
-      - uses: actions/download-artifact@v4
-        with:
-          name: output
-          path: output
-      - run: python agent.py download
-        env:
-          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: output
-          path: output
+      - name: 📥 Checkout Code
+        uses: actions/checkout@v4
 
-  build-long:
-    needs: download
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    strategy:
-      matrix:
-        lang: [pt, de, ja, ar]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: 🐍 Setup Python 3.11
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
-      - uses: actions/download-artifact@v4
-        with:
-          name: output
-          path: output
-      - run: python agent.py build
-        env:
-          LANG_CODE: ${{ matrix.lang }}
-          VIDEO_TYPE: long
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: output-long-${{ matrix.lang }}
-          path: output
+          cache: 'pip'
 
-  build-short:
-    needs: download
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      matrix:
-        lang: [pt, de, ja, ar]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu
-      - uses: actions/download-artifact@v4
-        with:
-          name: output
-          path: output
-      - run: python agent.py build
-        env:
-          LANG_CODE: ${{ matrix.lang }}
-          VIDEO_TYPE: short
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: output-short-${{ matrix.lang }}
-          path: output
+      - name: 📦 Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
 
-  upload-long:
-    needs: build-long
-    runs-on: ubuntu-latest
-    timeout-minutes: 25
-    strategy:
-      matrix:
-        lang: [pt, de, ja, ar]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with:
-          name: output-long-${{ matrix.lang }}
-          path: output
-      - run: python agent.py upload
-        env:
-          LANG_CODE: ${{ matrix.lang }}
-          VIDEO_TYPE: long
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: uploaded-long-${{ matrix.lang }}
-          path: output
+      - name: 🧠 Prepare Scripts & Metadata
+        run: python agent.py prepare
 
-  upload-short:
-    needs: build-short
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    strategy:
-      matrix:
-        lang: [pt, de, ja, ar]
-      fail-fast: false
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with:
-          name: output-short-${{ matrix.lang }}
-          path: output
-      - run: python agent.py upload
-        env:
-          LANG_CODE: ${{ matrix.lang }}
-          VIDEO_TYPE: short
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      - uses: actions/upload-artifact@v4
-        with:
-          name: uploaded-short-${{ matrix.lang }}
-          path: output
+      - name: 🖼️ Download Images
+        run: python agent.py download
 
-  comment-reply:
-    needs: [upload-long, upload-short]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with:
-          name: uploaded-long-pt
-          path: output
-        continue-on-error: true
-      - run: python agent.py comment
+      - name: 🎥 Build & Upload Loop
         env:
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-
-  ab-test:
-    needs: [upload-long, upload-short]
-    runs-on: ubuntu-latest
-    timeout-minutes: 10
-    if: always()
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - run: pip install -r requirements.txt
-      - uses: actions/download-artifact@v4
-        with:
-          name: uploaded-long-pt
-          path: output
-        continue-on-error: true
-      - run: python agent.py abtest
-        env:
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
-      - run: python agent.py analytics
-        env:
-          YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
-          YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
-          YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
+          # Suppress pypi warnings to keep logs clean
+          PIP_DISABLE_PIP_VERSION_CHECK: "1"
+        run: |
+          echo "=========================================="
+          echo "Starting Sequential Build & Upload Loop"
+          echo "=========================================="
+          
+          # Read languages from env (comma separated)
+          IFS=',' read -ra LANG_ARRAY <<< "$BATCH_LANGS"
+          TYPES=("long" "short")
+          
+          TOTAL_SUCCESS=0
+          TOTAL_FAIL=0
+          
+          for LANG in "${LANG_ARRAY[@]}"; do
+            # Trim whitespace just in case
+            LANG=$(echo "$LANG" | xargs)
+            
+            for TYPE in "${TYPES[@]}"; do
+              echo ""
+              echo "##############################################"
+              echo "# PROCESSING: $LANG | $TYPE"
+              echo "##############################################"
+              
+              export LANG_CODE="$LANG"
+              export VIDEO_TYPE="$TYPE"
+              
+              # Attempt Build
+              if python agent.py build; then
+                # Attempt Upload
+                if python agent.py upload; then
+                  echo "✅ SUCCESS: $LANG $TYPE uploaded!"
+                  ((TOTAL_SUCCESS++))
+                else
+                  echo "❌ FAILED: $LANG $TYPE upload failed (Likely YouTube Quota exceeded)."
+                  ((TOTAL_FAIL++))
+                fi
+              else
+                echo "❌ FAILED: $LANG $TYPE build failed. Skipping upload."
+                ((TOTAL_FAIL++))
+              fi
+              
+            done
+          done
+          
+          echo ""
+          echo "=========================================="
+          echo "FINAL REPORT"
+          echo "=========================================="
+          echo "Successes: $TOTAL_SUCCESS"
+          echo "Failures:  $TOTAL_FAIL"
+          
+          # If we had at least one success, don't mark the GitHub Action as failed.
+          # This prevents GitHub from sending you failure emails if quota runs out on video 7/8.
+          if [ "$TOTAL_SUCCESS" -gt 0 ]; then
+            exit 0
+          else
+            exit 1
+          fi
