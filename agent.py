@@ -1440,6 +1440,11 @@ def run_build():
     with open(os.path.join(OUT, "result.json"), "w") as f: json.dump(r, f)
     hb_print(f"BUILD SUCCESS: {lc} {kind} ({vd/60:.1f} min)")
 
+    # Cleanup temp slides to save disk space
+    try: shutil.rmtree(TEMP, ignore_errors=True)
+    except: pass
+    
+    hb_print(f"BUILD SUCCESS: {lc} {kind} ({vd/60:.1f} min)")
 
 # ═══════════════════════════════════════════════════════════════
 # UPLOAD MODULE
