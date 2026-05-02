@@ -334,7 +334,7 @@ def generate_title_from_script(script):
     prefix = random.choice(prefixes)
     case = random.choice(cases)
     if names:
-        title = f"{prefix} {case}: The {names[0]} {random.choice(suffixes)}"
+        title = f"{prefix} {case}: The {names[0]} Case {random.choice(suffixes)}"
     else:
         title = f"{prefix} {case} {random.choice(suffixes)}"
     return title[:70]
