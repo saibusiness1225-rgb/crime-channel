@@ -318,7 +318,7 @@ def generate_title_from_script(script):
                 "That Changed Everything", "That Remains a Mystery"]
     skip_words = {'The','This','That','And','But','For','Was','Were','Has','Had',
                   'His','Her','They','Their','When','Where','What','Which','Who',
-                  'How','Why','Not','All','From','Into','HOOK','INTRO','BACKGROUND',
+                  'How','Why','Not','All','From','Into','Then','HOOK','INTRO','BACKGROUND',
                   'CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION','PAUSE',
                   'SCENE','CHANGE','She','He','It','No','One','Two','Or',
                   'An','In','On','At','To','Of','By','As','Is','Be','Do'}
@@ -580,7 +580,7 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
     keys = list(OFFLINE_SCRIPTS.keys())
     random.shuffle(keys)
     combined = ""
-    for k in keys[:3]:
+    for k in keys:
         combined += OFFLINE_SCRIPTS[k]["script"] + "\n\n"
     combined = trim_script(combined, MAX_LONG_WORDS)
     wc = len(combined.split())
@@ -1404,8 +1404,10 @@ def run_build():
             with open(sp, "w", encoding="utf-8") as f: f.write(raw)
             wc = len(raw.split())
     clean = clean_text(raw); wc = len(clean.split())
-    if not iss and wc < MIN_LONG_WORDS:
+    if not iss and wc < MIN_LONG_WORDS and _ai_available:
         hb_print(f"SKIP: script too short ({wc} words)"); sys.exit(1)
+    if not iss and wc < MIN_LONG_WORDS:
+        hb_print(f"  WARNING: Script under {MIN_LONG_WORDS} words (AI was down), proceeding anyway...")
     hb_print(f"Building {LANGUAGES[lc]['name']} {kind} ({wc} words, ~{wc/150:.0f} min)...")
     ap = os.path.join(OUT, f"audio_{kind}_{lc}.mp3")
     vtt_path = os.path.join(OUT, f"subs_{kind}_{lc}.vtt")
