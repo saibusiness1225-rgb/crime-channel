@@ -188,37 +188,62 @@ OFFLINE_SHORTS = {
 
 
 # ═══════════════════════════════════════════════════════════════
+# HEARTBEAT - prevents GitHub Actions runner reclamation
+# ═══════════════════════════════════════════════════════════════
+_last_heartbeat = 0
+
+def heartbeat(msg=""):
+    """Print with flush so GitHub Actions sees output and doesn't kill the runner."""
+    global _last_heartbeat
+    now = time.time()
+    if now - _last_heartbeat < 2:
+        return
+    _last_heartbeat = now
+    if msg:
+        print(msg, flush=True)
+    else:
+        print(f"  [alive {int(now)}]", flush=True)
+
+
+def hb_print(msg):
+    """Normal print but always flushed."""
+    print(msg, flush=True)
+
+
+# ═══════════════════════════════════════════════════════════════
 # AI PROVIDERS
 # ═══════════════════════════════════════════════════════════════
 
-def call_gemini(prompt, max_retries=2):
+def call_gemini(prompt, max_retries=1):
     for attempt in range(max_retries):
+        heartbeat(f"  Gemini attempt {attempt+1}...")
         try:
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
             payload = {"contents": [{"parts": [{"text": prompt}]}],
                        "generationConfig": {"temperature": 0.9, "maxOutputTokens": 16384, "topP": 0.95}}
-            r = http_req.post(url, json=payload, timeout=180)
+            r = http_req.post(url, json=payload, timeout=45)
             if r.status_code == 200:
                 text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 if len(text) > 200:
                     return text
-            print(f"  Gemini attempt {attempt+1} failed: {r.status_code}")
+            hb_print(f"  Gemini attempt {attempt+1} failed: {r.status_code}")
         except Exception as e:
-            print(f"  Gemini error: {str(e)[:60]}")
-        time.sleep(3)
+            hb_print(f"  Gemini error: {str(e)[:60]}")
+        time.sleep(2)
     return None
 
 
 def call_pollinations(prompt):
+    heartbeat("  Trying Pollinations...")
     try:
         url = "https://text.pollinations.ai/"
         payload = {"messages": [{"role": "user", "content": prompt}],
                    "model": "openai", "seed": random.randint(1, 99999)}
-        r = http_req.post(url, json=payload, timeout=180)
+        r = http_req.post(url, json=payload, timeout=45)
         if r.status_code == 200 and len(r.text) > 200:
             return r.text
     except Exception as e:
-        print(f"  Pollinations error: {str(e)[:60]}")
+        hb_print(f"  Pollinations error: {str(e)[:60]}")
     return None
 
 
@@ -228,7 +253,7 @@ def gen_with_fallback(prompt):
         providers.append(("Gemini", call_gemini))
     providers.append(("Pollinations", call_pollinations))
     for name, fn in providers:
-        print(f"  Trying {name}...")
+        hb_print(f"  Trying {name}...")
         result = fn(prompt)
         if result and len(result) > 100:
             stripped = result.strip()
@@ -371,7 +396,7 @@ def trim_script(script, max_words=MAX_LONG_WORDS):
     wc = len(script.split())
     if wc <= max_words:
         return script
-    print(f"  Script too long ({wc} words), trimming to {max_words}...")
+    hb_print(f"  Trimming {wc} -> {max_words} words...")
     sections = parse_sections(script)
     result_sections = []
     current_words = 0
@@ -389,16 +414,15 @@ def trim_script(script, max_words=MAX_LONG_WORDS):
     if "[PAUSE]" not in result:
         result += "\n\n[PAUSE] What do you think? Let us know in the comments."
     final_wc = len(result.split())
-    print(f"  Trimmed to {final_wc} words (~{final_wc/150:.0f} min)")
+    hb_print(f"  Trimmed to {final_wc} words (~{final_wc/150:.0f} min)")
     return result
 
 
 def trim_short_script(script, max_words=MAX_SHORT_WORDS):
-    """Trim short script to max_words, keeping hook and conclusion."""
     wc = len(script.split())
     if wc <= max_words:
         return script
-    print(f"  Short script too long ({wc} words), trimming to {max_words}...")
+    hb_print(f"  Trimming short {wc} -> {max_words} words...")
     lines = script.split('\n')
     result = []
     in_crime = False
@@ -417,8 +441,7 @@ def trim_short_script(script, max_words=MAX_SHORT_WORDS):
         else:
             result.append(line)
     trimmed = '\n'.join(result)
-    final_wc = len(trimmed.split())
-    print(f"  Short trimmed to {final_wc} words")
+    hb_print(f"  Short trimmed to {len(trimmed.split())} words")
     return trimmed
 
 
@@ -426,10 +449,10 @@ def expand_script(script, target_words=TARGET_LONG_WORDS):
     current_wc = len(script.split())
     if current_wc >= target_words:
         return script
-    for expand_attempt in range(3):
+    for expand_attempt in range(2):
         shortfall = target_words - current_wc
         per_section = max(200, shortfall // 8)
-        print(f"  Expansion attempt {expand_attempt+1}: {current_wc} -> {target_words} words...")
+        hb_print(f"  Expansion {expand_attempt+1}: {current_wc} -> {target_words} words...")
         prompt = f"""You are expanding a true crime documentary script for a 25-minute YouTube video.
 The current script is only {current_wc} words but MUST be at least {target_words} words.
 
@@ -456,20 +479,21 @@ Write the COMPLETE expanded script now. Every section must be significantly long
             new_wc = len(result.split())
             has_markers = any(f'[{m}]' in result for m in ['HOOK','INTRO','BACKGROUND','THE CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION'])
             if new_wc >= current_wc * 1.3 and has_markers:
-                print(f"  Expanded to {new_wc} words (~{new_wc/150:.0f} min)")
+                hb_print(f"  Expanded to {new_wc} words (~{new_wc/150:.0f} min)")
                 script = result
                 current_wc = new_wc
                 if current_wc >= target_words:
                     return script
             else:
-                print(f"  Expansion result too short or malformed ({new_wc} words), retrying...")
+                hb_print(f"  Expansion too short ({new_wc} words), retrying...")
         else:
-            print(f"  Expansion AI call failed, retrying...")
-        time.sleep(2)
-    print("  Full expansion incomplete, trying section-by-section...")
+            hb_print(f"  Expansion AI failed, retrying...")
+        time.sleep(1)
+    hb_print("  Full expansion incomplete, trying section-by-section...")
     sections = parse_sections(script)
     expanded_sections = []
-    for sec in sections:
+    for i, sec in enumerate(sections):
+        heartbeat(f"  Expanding section {i+1}/{len(sections)}: {sec['name']}")
         sec_wc = len(sec['text'].split())
         target_sec_wc = max(sec_wc + 200, 400)
         sec_prompt = f"""Expand this true crime documentary section from {sec_wc} words to at least {target_sec_wc} words.
@@ -484,8 +508,7 @@ Keep the [{sec['name']}] marker. Do NOT remove any existing content, only ADD mo
             expanded_sections.append(f"[{sec['name']}] {sec['text']}")
         time.sleep(1)
     combined = "\n\n".join(expanded_sections)
-    combined_wc = len(combined.split())
-    print(f"  Section expansion: {combined_wc} words (~{combined_wc/150:.0f} min)")
+    hb_print(f"  Section expansion: {len(combined.split())} words (~{len(combined.split())/150:.0f} min)")
     return combined
 
 
@@ -496,58 +519,55 @@ Keep the [{sec['name']}] marker. Do NOT remove any existing content, only ADD mo
 def gen_script(category):
     best_script = None
     best_wc = 0
-    for attempt in range(5):
+    for attempt in range(3):
+        heartbeat(f"  AI script attempt {attempt+1}/3...")
         prompt = f"""Write a FULL-LENGTH true crime documentary script about: {category}
 
 THIS IS FOR A 25-MINUTE YOUTUBE VIDEO. You MUST write AT LEAST {TARGET_LONG_WORDS} words.
 Most successful true crime channels produce 20-30 minute videos. This script must be equally long.
 
 STRUCTURE - Use EXACTLY these section markers:
-[HOOK] - Shocking opening (150+ words) - Start with a terrifying fact, question, or revelation
-[INTRO] - Case overview and significance (400+ words) - Set the scene, explain why this case matters
-[BACKGROUND] - Victim profile and context (500+ words) - Who they were, their daily life, personality
-[THE CRIME] - Step-by-step account (600+ words) - Chronological detail, every known fact
-[INVESTIGATION] - Police work and evidence (600+ words) - Detectives, forensics, dead ends, breaks
-[SUSPECTS] - Each suspect detailed (500+ words) - Motive, opportunity, alibis, evidence for/against
-[RESOLUTION] - Outcome and current status (400+ words) - Trial, verdict, appeals, current status
-[CONCLUSION] - Legacy and unanswered questions (400+ words) - Impact, lessons, what remains unknown
+[HOOK] - Shocking opening (150+ words)
+[INTRO] - Case overview and significance (400+ words)
+[BACKGROUND] - Victim profile and context (500+ words)
+[THE CRIME] - Step-by-step account (600+ words)
+[INVESTIGATION] - Police work and evidence (600+ words)
+[SUSPECTS] - Each suspect detailed (500+ words)
+[RESOLUTION] - Outcome and current status (400+ words)
+[CONCLUSION] - Legacy and unanswered questions (400+ words)
 
-RETENTION TECHNIQUES - Include these throughout:
-- Every 3 minutes, add a hook: "But the worst was yet to come..." or "What they found would change everything..."
-- Foreshadow upcoming reveals: "Little did they know, the answer had been sitting in evidence for decades..."
-- Add cliffhangers before section breaks: "Then a witness came forward with a story that would break the case wide open..."
-- Include emotional moments: family reactions, community fear, victim impact
+RETENTION TECHNIQUES:
+- Every 3 minutes, add a hook: "But the worst was yet to come..."
+- Foreshadow upcoming reveals
+- Add cliffhangers before section breaks
+- Include emotional moments
 
 End with [PAUSE] and a thought-provoking question.
-
 DO NOT use fictional names. Use only REAL well-known cases.
 DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
         result = gen_with_fallback(prompt)
         if result:
             wc = len(result.split())
             markers = sum(1 for m in ['HOOK','INTRO','BACKGROUND','THE CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION'] if f'[{m}]' in result)
-            print(f"  AI attempt {attempt+1}: {wc} words, {markers}/8 sections")
+            hb_print(f"  AI attempt {attempt+1}: {wc} words, {markers}/8 sections")
             if wc > best_wc:
                 best_script = result
                 best_wc = wc
             if wc >= MIN_LONG_WORDS and markers >= 5:
-                print(f"  Accepted: {wc} words (~{wc/150:.0f} min)")
+                hb_print(f"  Accepted: {wc} words (~{wc/150:.0f} min)")
                 if wc > MAX_LONG_WORDS:
                     return trim_script(result, MAX_LONG_WORDS)
                 if wc < TARGET_LONG_WORDS:
                     return expand_script(result, TARGET_LONG_WORDS)
                 return result
-            else:
-                print(f"  Too short or missing sections, retrying...")
-        time.sleep(2)
+        time.sleep(1)
     if best_script and best_wc >= 800:
-        print(f"  Best AI result: {best_wc} words. Force-expanding...")
+        hb_print(f"  Best AI: {best_wc} words. Expanding...")
         result = expand_script(best_script, TARGET_LONG_WORDS)
         wc = len(result.split())
         if wc >= MIN_LONG_WORDS:
             return trim_script(result, MAX_LONG_WORDS)
-        print(f"  Still only {wc} words after expansion, combining with offline templates...")
-    print("  Using combined offline templates...")
+    hb_print("  Using offline templates (AI unavailable/too short)...")
     keys = list(OFFLINE_SCRIPTS.keys())
     random.shuffle(keys)
     combined = ""
@@ -562,6 +582,7 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
 
 
 def gen_short(working_title):
+    hb_print("  Generating short script...")
     prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
 
 REQUIREMENTS:
@@ -574,7 +595,7 @@ REQUIREMENTS:
     result = gen_with_fallback(prompt)
     if result and len(result) > 80:
         return result
-    print("  AI short failed. Using OFFLINE template...")
+    hb_print("  AI short failed. Using offline template...")
     return OFFLINE_SHORTS[random.choice(list(OFFLINE_SHORTS.keys()))]["script"]
 
 
@@ -597,6 +618,7 @@ Script: {script[:800]}"""
 
 
 def gen_meta(working_title, lang_code, lang_name, is_short):
+    heartbeat(f"  Generating {lang_name} metadata...")
     safe_title = working_title
     if not validate_title(safe_title):
         safe_title = generate_title_from_script(working_title if len(working_title) > 20 else "true crime mystery")
@@ -634,11 +656,11 @@ Write ALL in {lang_name}."""
 
 
 def translate(text, lang_code, lang_name):
+    heartbeat(f"  Translating to {lang_name}...")
     orig_wc = len(text.split())
     if orig_wc > MAX_LONG_WORDS:
         text = trim_script(text, MAX_LONG_WORDS)
         orig_wc = len(text.split())
-        print(f"  Capped input to {orig_wc} words before translation")
     prompt = f"""Translate this ENTIRE true crime script to {lang_name}.
 Keep [HOOK][INTRO][BACKGROUND][THE CRIME][INVESTIGATION][SUSPECTS][RESOLUTION][CONCLUSION][PAUSE] markers unchanged.
 Translate naturally and COMPLETELY. DO NOT skip, shorten, or summarize any sections.
@@ -647,45 +669,51 @@ The translation MUST be at least {orig_wc} words long - translate every single s
 {text}"""
     result = gen_with_fallback(prompt)
     if not result or len(result) < 50:
-        print(f"  Translation failed, keeping original ({orig_wc} words)")
+        hb_print(f"  Translation failed, keeping original ({orig_wc} words)")
         return text
     result_wc = len(result.split())
     if result_wc < orig_wc * 0.5:
-        print(f"  Translation too short ({result_wc} vs {orig_wc} original), keeping original")
+        hb_print(f"  Translation too short ({result_wc} vs {orig_wc}), keeping original")
         return text
     if result_wc < orig_wc * 0.7:
-        print(f"  WARNING: Translation shorter ({result_wc} vs {orig_wc}), but proceeding")
+        hb_print(f"  WARNING: Translation shorter ({result_wc} vs {orig_wc}), proceeding")
     else:
-        print(f"  Translation: {result_wc} words (original: {orig_wc})")
+        hb_print(f"  Translation: {result_wc} words (original: {orig_wc})")
     return result
 
 
 def run_prepare():
+    hb_print("=" * 50)
+    hb_print("PREPARE START")
+    hb_print("=" * 50)
     os.makedirs(os.path.join(OUT, "scripts"), exist_ok=True)
     os.makedirs(os.path.join(OUT, "metadata"), exist_ok=True)
     os.makedirs(ANALYTICS, exist_ok=True)
     ct = random.choice(CASE_CATEGORIES)
-    print(f"Category: {ct}")
-    print("\n[1/2] Generating long script...")
+    hb_print(f"Category: {ct}")
+
+    hb_print("\n[1/2] Generating long script...")
     ls = gen_script(ct)
     ls = trim_script(ls, MAX_LONG_WORDS)
     wt = extract_title(ls)
     lwc = len(ls.split())
-    print(f"  Title: {wt} | Words: {lwc} (~{lwc/150:.0f} min)")
+    hb_print(f"  Title: {wt} | Words: {lwc} (~{lwc/150:.0f} min)")
     if lwc < MIN_LONG_WORDS:
-        print(f"  WARNING: Final script still under {MIN_LONG_WORDS} words!")
+        hb_print(f"  WARNING: Final script under {MIN_LONG_WORDS} words!")
     with open(os.path.join(OUT, "scripts", "long_en.txt"), "w", encoding="utf-8") as f:
         f.write(ls)
-    print("\n[2/2] Generating short script...")
+
+    hb_print("\n[2/2] Generating short script...")
     ss = gen_short(wt)
     swc = len(ss.split())
-    print(f"  Words: {swc}")
+    hb_print(f"  Short words: {swc}")
     with open(os.path.join(OUT, "scripts", "short_en.txt"), "w", encoding="utf-8") as f:
         f.write(ss)
+
     batch = os.environ.get("BATCH_LANGS", "").strip()
     if batch:
         sel = [c.strip() for c in batch.split(",") if c.strip() in LANGUAGES]
-        print(f"  BATCH_LANGS override: {sel}")
+        hb_print(f"  BATCH_LANGS: {sel}")
     else:
         sel = list(BUILD_LANGS)
         if "en" not in sel:
@@ -696,27 +724,34 @@ def run_prepare():
             extra = ac[(d + len(sel)) % len(ac)]
             if extra not in sel:
                 sel.append(extra)
-    print(f"\nLanguages: {[LANGUAGES[c]['name'] for c in sel]}")
+
+    hb_print(f"\nLanguages: {[LANGUAGES[c]['name'] for c in sel]}")
     am = {}
     for code in sel:
         info = LANGUAGES[code]
-        print(f"\n=== {info['name']} ({code}) ===")
+        hb_print(f"\n=== {info['name']} ({code}) ===")
         am[code] = {}
         if code != "en":
-            print("  Translating long...")
+            hb_print("  Translating long...")
+            translated_long = translate(ls, code, info["name"])
             with open(os.path.join(OUT, "scripts", f"long_{code}.txt"), "w", encoding="utf-8") as f:
-                f.write(translate(ls, code, info["name"]))
-        print("  Generating long metadata...")
+                f.write(translated_long)
+        hb_print("  Generating long metadata...")
         am[code]["long"] = gen_meta(wt, code, info["name"], False)
         if code != "en":
-            print("  Translating short...")
+            hb_print("  Translating short...")
+            translated_short = translate(ss, code, info["name"])
             with open(os.path.join(OUT, "scripts", f"short_{code}.txt"), "w", encoding="utf-8") as f:
-                f.write(translate(ss, code, info["name"]))
-        print("  Generating short metadata...")
+                f.write(translated_short)
+        hb_print("  Generating short metadata...")
         am[code]["short"] = gen_meta(wt, code, info["name"], True)
+
     with open(os.path.join(OUT, "metadata", "all.json"), "w", encoding="utf-8") as f:
         json.dump(am, f, indent=2, ensure_ascii=False)
-    print(f"\nDone! Scripts ready for {len(sel)} languages.")
+
+    hb_print(f"\n{'=' * 50}")
+    hb_print(f"PREPARE DONE - {len(sel)} languages")
+    hb_print(f"{'=' * 50}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -724,11 +759,12 @@ def run_prepare():
 # ═══════════════════════════════════════════════════════════════
 
 def download_pexels_images(count):
-    from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
+    from PIL import Image
     images = []
     queries = random.sample(PEXELS_QUERIES, min(count, len(PEXELS_QUERIES)))
     per_query = max(1, count // len(queries))
     for q in queries:
+        heartbeat(f"  Pexels query: {q}")
         try:
             resp = http_req.get("https://api.pexels.com/v1/search",
                 params={"query": q, "per_page": per_query, "orientation": "landscape", "size": "large"},
@@ -738,13 +774,14 @@ def download_pexels_images(count):
             for photo in resp.json().get("photos", []):
                 img_url = photo["src"].get("large2x", photo["src"]["large"])
                 try:
-                    img_resp = http_req.get(img_url, timeout=25)
+                    img_resp = http_req.get(img_url, timeout=20)
                     if img_resp.status_code == 200 and len(img_resp.content) > 5000:
                         path = os.path.join(IMGS, f"pexels_{photo['id']}.jpg")
                         with open(path, "wb") as f:
                             f.write(img_resp.content)
                         try:
                             test = Image.open(path); test.verify(); images.append(path)
+                            hb_print(f"    Downloaded: {photo['id']}")
                         except:
                             os.remove(path)
                         if len(images) >= count:
@@ -752,7 +789,7 @@ def download_pexels_images(count):
                 except:
                     continue
         except Exception as e:
-            print(f"  Query '{q}' failed: {e}")
+            hb_print(f"  Query '{q}' failed: {e}")
     return images
 
 
@@ -785,11 +822,12 @@ def run_download():
     from PIL import Image
     os.makedirs(IMGS, exist_ok=True)
     total_needed = IMAGES_PER_VIDEO + IMAGES_PER_SHORT + 10
-    print(f"Downloading {total_needed} images...")
+    hb_print(f"Need {total_needed} images...")
     images = download_pexels_images(total_needed)
-    print(f"Got {len(images)} real images")
+    hb_print(f"Got {len(images)} real images")
     idx = len(images)
     while len(images) < total_needed:
+        heartbeat(f"  Generating fallback {idx}...")
         images.append(generate_dark_image(idx)); idx += 1
     valid = []
     for p in images:
@@ -799,7 +837,7 @@ def run_download():
         except:
             try: os.remove(p)
             except: pass
-    print(f"Total: {len(valid)} valid images ready")
+    hb_print(f"Total: {len(valid)} valid images ready")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -857,10 +895,10 @@ async def gen_tts(text, lc, kind, ap, sp):
     kk = "short" if kind == "short" else "long"
     vs = VOICES.get(lc, VOICES["en"]).get(kk, VOICES["en"][kk])
     for v in vs:
-        print(f"    Voice: {v}")
+        hb_print(f"    Voice: {v}")
         try:
             if await try_voice(text, v, ap, sp):
-                print(f"    OK: {v}"); return True
+                hb_print(f"    OK: {v}"); return True
         except:
             if os.path.exists(ap): os.remove(ap)
     return False
@@ -1081,18 +1119,18 @@ def gen_atmospheric_music(dur, op):
         if r3.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 500:
             return True
     except: pass
-    print("    WARNING: Music generation failed, continuing without music")
+    hb_print("    WARNING: Music generation failed")
     return False
 
 
 def _ffmpeg_run(cmd, label="ffmpeg", timeout=None):
     if timeout is None:
         timeout = 2400
-    print(f"    {label}: timeout={timeout}s")
+    hb_print(f"    {label}: timeout={timeout}s")
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     if r.returncode != 0:
         err = (r.stderr or "")[:500]
-        print(f"    {label} STDERR: {err}")
+        hb_print(f"    {label} STDERR: {err}")
     return r
 
 
@@ -1132,9 +1170,10 @@ def render_video(imgs, ap, srt_path, op, short=False):
     total = sum(s[2] for s in slides)
     if total > 0 and abs(total-adur) > 2:
         ratio = adur/total; slides = [(s[0],s[1],s[2]*ratio) for s in slides]
-    print(f"    Total slides: {len(slides)}, target duration: {adur:.0f}s ({adur/60:.1f} min)")
+    hb_print(f"    Slides: {len(slides)}, target: {adur:.0f}s ({adur/60:.1f} min)")
     spaths = []
     for i, (st, data, dur) in enumerate(slides):
+        heartbeat(f"    Making slide {i+1}/{len(slides)}")
         s = os.path.join(TEMP, f"s_{i:04d}.jpg")
         try:
             if st == "cin":
@@ -1165,10 +1204,10 @@ def render_video(imgs, ap, srt_path, op, short=False):
             p = os.path.abspath(spaths[-1])
             f.write(f"file '{p}'\n")
     mp = os.path.join(TEMP, "music.mp3")
-    print(f"    Generating music...")
+    hb_print(f"    Generating music...")
     hm = gen_atmospheric_music(adur, mp)
     if hm and (not os.path.exists(mp) or os.path.getsize(mp) < 500):
-        print("    WARNING: Music file invalid, skipping music"); hm = False
+        hb_print("    Music invalid, skipping"); hm = False
     use_preset = PRESET
     use_crf = CRF
     use_fps = FPS
@@ -1177,8 +1216,8 @@ def render_video(imgs, ap, srt_path, op, short=False):
     force_style = (f"FontSize={fs_size}\\,PrimaryColour=&H00FFFFFF\\,OutlineColour=&H80000000\\,"
                    f"BackColour=&H80000000\\,Outline=2\\,Shadow=1\\,MarginV=35")
     has_subs = srt_path and os.path.exists(srt_path) and os.path.getsize(srt_path) > 50
-    print(f"    Encoding: preset={use_preset}, crf={use_crf}, fps={use_fps}, timeout={encode_timeout}s")
-    # === ATTEMPT 1: subtitles + music ===
+    hb_print(f"    Encoding: preset={use_preset}, crf={use_crf}, timeout={encode_timeout}s")
+
     if has_subs and hm:
         try:
             srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
@@ -1191,15 +1230,14 @@ def render_video(imgs, ap, srt_path, op, short=False):
                     "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
             r = _ffmpeg_run(cmd, "render+subs+music", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-                print("    Render: subtitles + music OK"); return
+                hb_print("    Render: subs+music OK"); return
             if os.path.exists(op): os.remove(op)
-            print("    Attempt 1 failed, trying next...")
         except Exception as e:
-            print(f"    Attempt 1 error: {e}")
+            hb_print(f"    Attempt 1 error: {e}")
             try:
                 if os.path.exists(op): os.remove(op)
             except: pass
-    # === ATTEMPT 2: subtitles only ===
+
     if has_subs:
         try:
             srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
@@ -1212,15 +1250,14 @@ def render_video(imgs, ap, srt_path, op, short=False):
                     "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
             r = _ffmpeg_run(cmd, "render+subs", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-                print("    Render: subtitles only OK"); return
+                hb_print("    Render: subs OK"); return
             if os.path.exists(op): os.remove(op)
-            print("    Attempt 2 failed, trying next...")
         except Exception as e:
-            print(f"    Attempt 2 error: {e}")
+            hb_print(f"    Attempt 2 error: {e}")
             try:
                 if os.path.exists(op): os.remove(op)
             except: pass
-    # === ATTEMPT 3: music only ===
+
     if hm:
         try:
             fc = f"[0:v]fps={use_fps},format=yuv420p[v];[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]"
@@ -1230,15 +1267,14 @@ def render_video(imgs, ap, srt_path, op, short=False):
                     "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
             r = _ffmpeg_run(cmd, "render+music", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-                print("    Render: music only OK"); return
+                hb_print("    Render: music OK"); return
             if os.path.exists(op): os.remove(op)
-            print("    Attempt 3 failed, trying next...")
         except Exception as e:
-            print(f"    Attempt 3 error: {e}")
+            hb_print(f"    Attempt 3 error: {e}")
             try:
                 if os.path.exists(op): os.remove(op)
             except: pass
-    # === ATTEMPT 4: simple ===
+
     try:
         fc = f"[0:v]fps={use_fps},format=yuv420p[v];[1:a]acopy[a]"
         inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
@@ -1247,14 +1283,14 @@ def render_video(imgs, ap, srt_path, op, short=False):
                 "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
         r = _ffmpeg_run(cmd, "render-simple", encode_timeout)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-            print("    Render: simple OK"); return
+            hb_print("    Render: simple OK"); return
         if os.path.exists(op): os.remove(op)
     except Exception as e:
-        print(f"    Attempt 4 error: {e}")
+        hb_print(f"    Attempt 4 error: {e}")
         try:
             if os.path.exists(op): os.remove(op)
         except: pass
-    # === ATTEMPT 5: minimal ===
+
     try:
         base_video = os.path.join(TEMP, "base_video.mp4")
         cmd_slides = (["ffmpeg","-y","-f","concat","-safe","0","-i",cl,
@@ -1263,20 +1299,20 @@ def render_video(imgs, ap, srt_path, op, short=False):
                         "-pix_fmt","yuv420p","-an",base_video])
         r = _ffmpeg_run(cmd_slides, "render-slides", encode_timeout)
         if r.returncode != 0 or not os.path.exists(base_video) or os.path.getsize(base_video) < 5000:
-            raise Exception("Slide video creation failed")
+            raise Exception("Slide video failed")
         cmd_mux = (["ffmpeg","-y","-i",base_video,"-i",ap,
                      "-c:v","copy","-c:a","aac","-b:a","128k",
                      "-shortest","-movflags","+faststart",op])
         r = _ffmpeg_run(cmd_mux, "render-mux", 300)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
-            print("    Render: minimal mux OK"); return
+            hb_print("    Render: mux OK"); return
         if os.path.exists(op): os.remove(op)
     except Exception as e:
-        print(f"    Attempt 5 error: {e}")
+        hb_print(f"    Attempt 5 error: {e}")
         try:
             if os.path.exists(op): os.remove(op)
         except: pass
-    raise Exception("Video encoding failed after all 5 attempts.")
+    raise Exception("Video encoding failed after all attempts.")
 
 
 def make_thumb(title, imgs, op, short=False):
@@ -1319,55 +1355,46 @@ def run_build():
     os.makedirs(OUT, exist_ok=True)
     lc = os.environ.get("LANG_CODE", "en"); iss = os.environ.get("VIDEO_TYPE", "long") == "short"
     kind = "short" if iss else "long"
-    print(f"=== BUILD: lang={lc}, type={kind} ===")
+    hb_print(f"=== BUILD: lang={lc}, type={kind} ===")
     sp = os.path.join(OUT, "scripts", f"{kind}_{lc}.txt")
-    if not os.path.exists(sp): print("SKIP: no script"); sys.exit(1)
+    if not os.path.exists(sp): hb_print("SKIP: no script"); sys.exit(1)
     with open(sp, "r", encoding="utf-8") as f: raw = f.read()
     if not iss:
         wc = len(raw.split())
-        print(f"  Script word count: {wc} (~{wc/150:.0f} min)")
+        hb_print(f"  Script: {wc} words (~{wc/150:.0f} min)")
         if wc > MAX_LONG_WORDS:
             raw = trim_script(raw, MAX_LONG_WORDS)
             with open(sp, "w", encoding="utf-8") as f: f.write(raw)
             wc = len(raw.split())
-            print(f"  Trimmed to {wc} words (~{wc/150:.0f} min)")
         if wc < MIN_LONG_WORDS:
-            print(f"  Script too short ({wc} words), expanding...")
+            hb_print(f"  Expanding {wc} -> {TARGET_LONG_WORDS}...")
             expanded = expand_script(raw, TARGET_LONG_WORDS)
             expanded = trim_script(expanded, MAX_LONG_WORDS)
             with open(sp, "w", encoding="utf-8") as f: f.write(expanded)
-            raw = expanded
-            wc = len(raw.split())
-            print(f"  After expansion: {wc} words (~{wc/150:.0f} min)")
+            raw = expanded; wc = len(raw.split())
     else:
         wc = len(raw.split())
-        print(f"  Short script word count: {wc}")
         if wc > MAX_SHORT_WORDS:
-            print(f"  Short too long ({wc} words), trimming to {MAX_SHORT_WORDS}...")
             raw = trim_short_script(raw, MAX_SHORT_WORDS)
             with open(sp, "w", encoding="utf-8") as f: f.write(raw)
             wc = len(raw.split())
-            print(f"  Short trimmed to {wc} words")
     clean = clean_text(raw); wc = len(clean.split())
     if not iss and wc < MIN_LONG_WORDS:
-        print(f"SKIP: script still too short after expansion ({wc} words)")
-        sys.exit(1)
-    print(f"Building {LANGUAGES[lc]['name']} {kind} ({wc} words, ~{wc/150:.0f} min)...")
+        hb_print(f"SKIP: script too short ({wc} words)"); sys.exit(1)
+    hb_print(f"Building {LANGUAGES[lc]['name']} {kind} ({wc} words, ~{wc/150:.0f} min)...")
     ap = os.path.join(OUT, f"audio_{kind}_{lc}.mp3")
     vtt_path = os.path.join(OUT, f"subs_{kind}_{lc}.vtt")
     ok = asyncio.run(gen_tts(clean, lc, kind, ap, vtt_path))
     if not ok or not os.path.exists(ap) or os.path.getsize(ap) < 1000:
-        print("FAIL: TTS failed"); sys.exit(1)
+        hb_print("FAIL: TTS failed"); sys.exit(1)
     adur = get_dur(ap)
     min_dur = 10.0 if iss else 900.0
     max_dur = 120.0 if iss else 2400.0
     if adur < min_dur:
-        print(f"SKIP: audio too short ({adur:.0f}s / {adur/60:.1f} min, need {min_dur/60:.0f} min)")
-        sys.exit(1)
+        hb_print(f"SKIP: audio too short ({adur/60:.1f} min)"); sys.exit(1)
     if adur > max_dur:
-        print(f"SKIP: audio too long ({adur:.0f}s / {adur/60:.1f} min, max {max_dur/60:.0f} min)")
-        sys.exit(1)
-    print(f"  Audio duration: {adur:.0f}s ({adur/60:.1f} min)")
+        hb_print(f"SKIP: audio too long ({adur/60:.1f} min)"); sys.exit(1)
+    hb_print(f"  Audio: {adur:.0f}s ({adur/60:.1f} min)")
     srt_path = vtt_to_srt(vtt_path)
     ai = sorted([os.path.join(IMGS,f) for f in os.listdir(IMGS) if f.lower().endswith(('.jpg','.jpeg','.png'))]) if os.path.exists(IMGS) else []
     if not ai:
@@ -1379,14 +1406,14 @@ def run_build():
     imgs = random.sample(ai, min(ni, len(ai)))
     vp = os.path.join(OUT, f"video_{kind}_{lc}.mp4")
     try: render_video(imgs, ap, srt_path, vp, iss)
-    except Exception as e: print(f"FAIL: render error: {e}"); sys.exit(1)
+    except Exception as e: hb_print(f"FAIL: render: {e}"); sys.exit(1)
     if not os.path.exists(vp): sys.exit(1)
     vd = get_dur(vp); md = 10.0 if iss else 900.0
     if vd < md:
         try: os.remove(vp)
         except: pass
-        print(f"SKIP: video too short ({vd:.0f}s / {vd/60:.1f} min)"); sys.exit(1)
-    print(f"Video: {vd:.0f}s ({vd/60:.1f} min)")
+        hb_print(f"SKIP: video too short ({vd/60:.1f} min)"); sys.exit(1)
+    hb_print(f"Video: {vd:.0f}s ({vd/60:.1f} min)")
     mf = os.path.join(OUT, "metadata", "all.json"); tt = f"{LANGUAGES[lc]['name']} Crime Story"
     if os.path.exists(mf):
         try:
@@ -1401,7 +1428,7 @@ def run_build():
         except: pass
     r = {"video": vp, "thumbnail": tp, "lang": lc, "kind": kind, "duration": vd}
     with open(os.path.join(OUT, "result.json"), "w") as f: json.dump(r, f)
-    print(f"BUILD SUCCESS: {lc} {kind} ({vd/60:.1f} min)")
+    hb_print(f"BUILD SUCCESS: {lc} {kind} ({vd/60:.1f} min)")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1501,7 +1528,7 @@ def upload_video(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
     import googleapiclient.http
     yt = get_yt_service()
     ct = sanitize_youtube_title(title)
-    print(f"  Title: {ct[:60]}")
+    hb_print(f"  Title: {ct[:60]}")
     prefixes = ["SHOCKING:","BREAKING:","EXPOSED:","REVEALED:","THE TRUTH:"]
     if not any(ct.upper().startswith(p.rstrip(":")) for p in prefixes):
         if random.random() < 0.5:
@@ -1521,9 +1548,10 @@ def upload_video(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
                 media_body=googleapiclient.http.MediaFileUpload(vp, chunksize=8*1024*1024, resumable=True))
             res = None
             while res is None:
+                heartbeat(f"  Upload progress...")
                 status, res = req.next_chunk()
-                if status: print(f"  Upload: {int(status.progress()*100)}%")
-            vid = res["id"]; print(f"  Video ID: {vid}"); break
+                if status: hb_print(f"  Upload: {int(status.progress()*100)}%")
+            vid = res["id"]; hb_print(f"  Video ID: {vid}"); break
         except Exception as e:
             err = str(e).lower()
             if attempt < 2:
@@ -1535,7 +1563,7 @@ def upload_video(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
             else: raise Exception(f"Upload failed 3x: {str(e)[:200]}")
     if not vid: raise Exception("Upload failed - no video ID")
     if tp and os.path.exists(tp) and os.path.getsize(tp) > 5000:
-        try: yt.thumbnails().set(videoId=vid, media_body=googleapiclient.http.MediaFileUpload(tp)).execute(); print("  Thumbnail set")
+        try: yt.thumbnails().set(videoId=vid, media_body=googleapiclient.http.MediaFileUpload(tp)).execute(); hb_print("  Thumbnail set")
         except: pass
     try:
         pl_title = f"{'Shorts - ' if short else ''}True Crime - {LANGUAGES[lc]['name']}"
@@ -1550,14 +1578,14 @@ def upload_video(vp, tp, title, desc, tags, lc, short=False, pinned_comment="",
             pid = res["id"]
         yt.playlistItems().insert(part="snippet", body={
             "snippet": {"playlistId": pid, "resourceId": {"kind": "youtube#video", "videoId": vid}}}).execute()
-        print("  Added to playlist")
+        hb_print("  Added to playlist")
     except: pass
     if pinned_comment and len(pinned_comment.strip()) >= 5:
         try:
             pc = pinned_comment.replace('<','').replace('>','').replace('&','and')[:500]
             yt.commentThreads().insert(part="snippet", body={
                 "snippet": {"videoId": vid, "topLevelComment": {"snippet": {"textOriginal": pc}}}}).execute()
-            print("  Pinned comment posted")
+            hb_print("  Pinned comment posted")
         except: pass
     os.makedirs(ANALYTICS, exist_ok=True)
     with open(os.path.join(ANALYTICS, "uploads.jsonl"), "a") as f:
@@ -1572,15 +1600,15 @@ def run_upload():
     mf = os.path.join(OUT, "metadata", "all.json")
     lc = os.environ.get("LANG_CODE", "en"); short = os.environ.get("VIDEO_TYPE", "long") == "short"
     kind = "short" if short else "long"
-    print(f"=== UPLOAD: lang={lc}, type={kind} ===")
-    if not os.path.exists(rf): print("FAIL: no result.json"); sys.exit(1)
+    hb_print(f"=== UPLOAD: lang={lc}, type={kind} ===")
+    if not os.path.exists(rf): hb_print("FAIL: no result.json"); sys.exit(1)
     with open(rf) as f: r = json.load(f)
-    if r.get("skip"): print("FAIL: build skipped"); sys.exit(1)
-    if not os.path.exists(mf): print("FAIL: no metadata"); sys.exit(1)
+    if r.get("skip"): hb_print("FAIL: build skipped"); sys.exit(1)
+    if not os.path.exists(mf): hb_print("FAIL: no metadata"); sys.exit(1)
     with open(mf) as f: am = json.load(f)
     m = am.get(lc, {}).get(kind, {})
-    if not m: print(f"FAIL: no metadata for {lc}/{kind}"); sys.exit(1)
-    if not os.path.exists(r.get("video", "")): print("FAIL: video not found"); sys.exit(1)
+    if not m: hb_print(f"FAIL: no metadata for {lc}/{kind}"); sys.exit(1)
+    if not os.path.exists(r.get("video", "")): hb_print("FAIL: video not found"); sys.exit(1)
     ts = ""
     if not short:
         ts = "0:00 - Intro\n2:00 - Background\n5:00 - The Crime\n10:00 - Investigation\n15:00 - Suspects\n18:00 - Resolution\n21:00 - Conclusion\n"
@@ -1588,8 +1616,8 @@ def run_upload():
         vid = upload_video(r["video"], r["thumbnail"], m.get("title","True Crime Mystery"),
             m.get("description",""), m.get("tags",["true crime"]), lc, short,
             m.get("pinned_comment",""), m.get("title_b",""), m.get("category",""), ts)
-        print(f"\nUPLOAD SUCCESS: https://youtube.com/watch?v={vid}")
-    except Exception as e: print(f"\nUPLOAD FAILED: {e}"); sys.exit(1)
+        hb_print(f"\nUPLOAD SUCCESS: https://youtube.com/watch?v={vid}")
+    except Exception as e: hb_print(f"\nUPLOAD FAILED: {e}"); sys.exit(1)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1623,14 +1651,14 @@ def run_comment():
     log_file = os.path.join(ANALYTICS, "uploads.jsonl")
     replied_file = os.path.join(ANALYTICS, "replied_comments.txt")
     os.makedirs(ANALYTICS, exist_ok=True)
-    if not os.path.exists(log_file): print("No uploads"); return
+    if not os.path.exists(log_file): hb_print("No uploads"); return
     uploads = []
     with open(log_file, "r") as f:
         for line in f:
             if line.strip(): uploads.append(json.loads(line))
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(days=7)
     recent = [u for u in uploads[-50:] if datetime.datetime.fromisoformat(u["uploaded_at"][:-1]) > cutoff]
-    if not recent: print("No recent uploads"); return
+    if not recent: hb_print("No recent uploads"); return
     total = 0
     for upload in recent:
         vid, lang, title = upload["video_id"], upload["lang"], upload.get("title","")
@@ -1655,7 +1683,7 @@ def run_comment():
             except: pass
             if total >= MAX_COMMENT_REPLIES_PER_RUN: break
         if total >= MAX_COMMENT_REPLIES_PER_RUN: break
-    print(f"Replied to {total} comments")
+    hb_print(f"Replied to {total} comments")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1667,7 +1695,7 @@ def run_abtest():
     log_file = os.path.join(ANALYTICS, "uploads.jsonl")
     ab_log = os.path.join(ANALYTICS, "ab_tests.jsonl")
     os.makedirs(ANALYTICS, exist_ok=True)
-    if not os.path.exists(log_file): print("No uploads"); return
+    if not os.path.exists(log_file): hb_print("No uploads"); return
     tested = set()
     if os.path.exists(ab_log):
         with open(ab_log, "r") as f:
@@ -1681,7 +1709,7 @@ def run_abtest():
             if line.strip():
                 u = json.loads(line)
                 if u.get("title_b") and u["video_id"] not in tested: uploads.append(u)
-    if not uploads: print("No videos to test"); return
+    if not uploads: hb_print("No videos to test"); return
     cutoff = datetime.datetime.utcnow() - datetime.timedelta(hours=AB_TEST_WAIT_HOURS)
     tests = 0
     for upload in uploads:
@@ -1695,7 +1723,7 @@ def run_abtest():
             views = int(res["items"][0]["statistics"].get("viewCount", 0))
         except: continue
         if views < 10 or ta == tb: continue
-        print(f"  Testing: {vid[:8]} | Views: {views}")
+        hb_print(f"  Testing: {vid[:8]} | Views: {views}")
         try:
             vid_res = yt.videos().list(part="snippet,status", id=vid).execute()
             if not vid_res.get("items"): continue
@@ -1708,7 +1736,7 @@ def run_abtest():
         except: pass
         time.sleep(5)
         if tests >= 3: break
-    print(f"A/B tests: {tests}")
+    hb_print(f"A/B tests: {tests}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1720,14 +1748,14 @@ def run_analytics():
     log_file = os.path.join(ANALYTICS, "uploads.jsonl")
     stats_file = os.path.join(ANALYTICS, "stats.jsonl")
     os.makedirs(ANALYTICS, exist_ok=True)
-    if not os.path.exists(log_file): print("No uploads"); return
+    if not os.path.exists(log_file): hb_print("No uploads"); return
     uploads = []
     with open(log_file, "r") as f:
         for line in f:
             if line.strip():
                 try: uploads.append(json.loads(line))
                 except: pass
-    if not uploads: print("No uploads"); return
+    if not uploads: hb_print("No uploads"); return
     now = datetime.datetime.utcnow().isoformat()
     new_stats = []
     for upload in uploads:
@@ -1740,7 +1768,7 @@ def run_analytics():
                     "views": int(stats.get("viewCount",0)), "likes": int(stats.get("likeCount",0)),
                     "title": item["snippet"].get("title","")[:60],
                     "lang": upload.get("lang","en"), "type": upload.get("type","long")})
-                print(f"  {vid[:8]}... {stats.get('viewCount',0):>6} views")
+                hb_print(f"  {vid[:8]}... {stats.get('viewCount',0):>6} views")
         except: pass
         time.sleep(1)
     if new_stats:
@@ -1748,8 +1776,8 @@ def run_analytics():
             for e in new_stats: f.write(json.dumps(e) + "\n")
         tv = sum(s["views"] for s in new_stats); av = tv / len(new_stats)
         best = max(new_stats, key=lambda x: x["views"])
-        print(f"\n  Total: {tv:,} views | Avg: {av:,.0f}/video")
-        print(f"  Best: {best['title'][:50]} ({best['views']:,} views)")
+        hb_print(f"\n  Total: {tv:,} views | Avg: {av:,.0f}/video")
+        hb_print(f"  Best: {best['title'][:50]} ({best['views']:,} views)")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1766,7 +1794,7 @@ def is_gibberish_title(text):
 def run_cleanup():
     yt = get_yt_service()
     channels = yt.channels().list(part="contentDetails", mine=True).execute()
-    if not channels.get("items"): print("No channel"); return
+    if not channels.get("items"): hb_print("No channel"); return
     uploads_playlist = channels["items"][0]["contentDetails"]["relatedPlaylists"]["uploads"]
     videos = []; page_token = None
     while True:
@@ -1776,20 +1804,20 @@ def run_cleanup():
             videos.append({"id": item["contentDetails"]["videoId"], "title": item["snippet"]["title"]})
         page_token = pl.get("nextPageToken")
         if not page_token: break
-    print(f"Found {len(videos)} videos")
+    hb_print(f"Found {len(videos)} videos")
     to_delete = []
     for v in videos:
         reason = None
         if "Error:" in v["title"] or "All AI providers failed" in v["title"]: reason = "ERROR"
         elif is_gibberish_title(v["title"]): reason = "GIBBERISH"
-        if reason: to_delete.append((v["id"], v["title"], reason)); print(f"  [{reason}] {v['title'][:60]}")
-    if not to_delete: print("No bad videos!"); return
-    print(f"\nDeleting {len(to_delete)} bad videos...")
+        if reason: to_delete.append((v["id"], v["title"], reason)); hb_print(f"  [{reason}] {v['title'][:60]}")
+    if not to_delete: hb_print("No bad videos!"); return
+    hb_print(f"\nDeleting {len(to_delete)} bad videos...")
     deleted = 0
     for vid, title, reason in to_delete:
-        try: yt.videos().delete(id=vid).execute(); print(f"  DELETED: {title[:50]}"); deleted += 1; time.sleep(2)
+        try: yt.videos().delete(id=vid).execute(); hb_print(f"  DELETED: {title[:50]}"); deleted += 1; time.sleep(2)
         except: pass
-    print(f"Cleaned {deleted}/{len(to_delete)}")
+    hb_print(f"Cleaned {deleted}/{len(to_delete)}")
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1797,19 +1825,19 @@ def run_cleanup():
 # ═══════════════════════════════════════════════════════════════
 
 def run_full():
-    print("=" * 60); print("FULL PIPELINE START"); print("=" * 60)
-    print("\n>>> STEP 1: PREPARE <<<"); run_prepare()
-    print("\n>>> STEP 2: DOWNLOAD <<<"); run_download()
+    hb_print("=" * 60); hb_print("FULL PIPELINE START"); hb_print("=" * 60)
+    hb_print("\n>>> STEP 1: PREPARE <<<"); run_prepare()
+    hb_print("\n>>> STEP 2: DOWNLOAD <<<"); run_download()
     lc = os.environ.get("LANG_CODE", "en")
     for vtype in ["long", "short"]:
         os.environ["VIDEO_TYPE"] = vtype
-        print(f"\n>>> STEP 3: BUILD {vtype.upper()} <<<")
+        hb_print(f"\n>>> STEP 3: BUILD {vtype.upper()} <<<")
         try: run_build()
-        except Exception as e: print(f"Build {vtype} failed: {e}"); continue
-        print(f"\n>>> STEP 4: UPLOAD {vtype.upper()} <<<")
+        except Exception as e: hb_print(f"Build {vtype} failed: {e}"); continue
+        hb_print(f"\n>>> STEP 4: UPLOAD {vtype.upper()} <<<")
         try: run_upload()
-        except Exception as e: print(f"Upload {vtype} failed: {e}")
-    print("\n" + "=" * 60); print("FULL PIPELINE COMPLETE"); print("=" * 60)
+        except Exception as e: hb_print(f"Upload {vtype} failed: {e}")
+    hb_print("\n" + "=" * 60); hb_print("FULL PIPELINE COMPLETE"); hb_print("=" * 60)
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -1823,5 +1851,5 @@ if __name__ == "__main__":
                 "upload": run_upload, "comment": run_comment, "abtest": run_abtest,
                 "analytics": run_analytics, "cleanup": run_cleanup, "full": run_full}
     if cmd not in commands:
-        print(f"Unknown: {cmd}\nAvailable: {', '.join(commands.keys())}"); sys.exit(1)
+        hb_print(f"Unknown: {cmd}\nAvailable: {', '.join(commands.keys())}"); sys.exit(1)
     commands[cmd]()
