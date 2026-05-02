@@ -23,7 +23,7 @@ Environment Variables:
   VIDEO_TYPE          - "long" or "short"
 """
 
-import os, json, random, time, datetime, re, subprocess, asyncio, shutil, math, sys
+import os, json, random, time, datetime, re, subprocess, asyncio, shutil, math, sys, threading
 import requests as http_req
 from config import *
 
