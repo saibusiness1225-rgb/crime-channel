@@ -84,14 +84,14 @@ jobs:
                 # Attempt Upload
                 if python agent.py upload; then
                   echo "✅ SUCCESS: $LANG $TYPE uploaded!"
-                  ((TOTAL_SUCCESS++))
+                  TOTAL_SUCCESS=$((TOTAL_SUCCESS + 1))
                 else
                   echo "❌ FAILED: $LANG $TYPE upload failed (Likely YouTube Quota exceeded)."
-                  ((TOTAL_FAIL++))
+                  TOTAL_FAIL=$((TOTAL_FAIL + 1))
                 fi
               else
                 echo "❌ FAILED: $LANG $TYPE build failed. Skipping upload."
-                ((TOTAL_FAIL++))
+                TOTAL_FAIL=$((TOTAL_FAIL + 1))
               fi
               
             done
