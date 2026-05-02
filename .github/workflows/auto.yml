@@ -44,11 +44,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
+      - name: 🎬 Install FFmpeg
+        run: sudo apt-get update && sudo apt-get install -y ffmpeg
+
       - name: 🧠 Prepare Scripts & Metadata
         run: python agent.py prepare
-
-      - name: 🖼️ Download Images
-        run: python agent.py download
 
       - name: 🎥 Build & Upload Loop
         env:
