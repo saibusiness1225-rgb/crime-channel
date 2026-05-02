@@ -38,6 +38,11 @@ def _keep_alive():
 threading.Thread(target=_keep_alive, daemon=True).start()
 
 # ═══════════════════════════════════════════════════════════════
+# GLOBAL AI STATE - prevents spamming dead APIs
+# ═══════════════════════════════════════════════════════════════
+_ai_available = True  # Set to False once we detect AI is completely down
+
+# ═══════════════════════════════════════════════════════════════
 # OFFLINE SCRIPT TEMPLATES (ZERO AI REQUIRED)
 # ═══════════════════════════════════════════════════════════════
 OFFLINE_SCRIPTS = {
@@ -203,7 +208,6 @@ OFFLINE_SHORTS = {
 _last_heartbeat = 0
 
 def heartbeat(msg=""):
-    """Print with flush so GitHub Actions sees output and doesn't kill the runner."""
     global _last_heartbeat
     now = time.time()
     if now - _last_heartbeat < 2:
@@ -216,7 +220,6 @@ def heartbeat(msg=""):
 
 
 def hb_print(msg):
-    """Normal print but always flushed."""
     print(msg, flush=True)
 
 
@@ -225,6 +228,7 @@ def hb_print(msg):
 # ═══════════════════════════════════════════════════════════════
 
 def call_gemini(prompt, max_retries=1):
+    global _ai_available
     for attempt in range(max_retries):
         heartbeat(f"  Gemini attempt {attempt+1}...")
         try:
@@ -236,6 +240,10 @@ def call_gemini(prompt, max_retries=1):
                 text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 if len(text) > 200:
                     return text
+            if r.status_code == 429:
+                hb_print(f"  Gemini rate limited (429)")
+                _ai_available = False
+                return None
             hb_print(f"  Gemini attempt {attempt+1} failed: {r.status_code}")
         except Exception as e:
             hb_print(f"  Gemini error: {str(e)[:60]}")
@@ -244,7 +252,6 @@ def call_gemini(prompt, max_retries=1):
 
 
 def call_pollinations(prompt):
-    heartbeat("  Trying Pollinations...")
     try:
         url = "https://text.pollinations.ai/"
         payload = {"messages": [{"role": "user", "content": prompt}],
@@ -253,11 +260,14 @@ def call_pollinations(prompt):
         if r.status_code == 200 and len(r.text) > 200:
             return r.text
     except Exception as e:
-        hb_print(f"  Pollinations error: {str(e)[:60]}")
+        hb_print(f"  Pollinations error: {str(e)[:80]}")
     return None
 
 
 def gen_with_fallback(prompt):
+    global _ai_available
+    if not _ai_available:
+        return None
     providers = []
     if GEMINI_KEY:
         providers.append(("Gemini", call_gemini))
@@ -275,6 +285,8 @@ def gen_with_fallback(prompt):
                 if gibberish_count / len(words) > 0.4:
                     continue
             return result
+    _ai_available = False
+    hb_print("  All AI providers failed - marking AI as unavailable")
     return None
 
 
@@ -456,6 +468,10 @@ def trim_short_script(script, max_words=MAX_SHORT_WORDS):
 
 
 def expand_script(script, target_words=TARGET_LONG_WORDS):
+    global _ai_available
+    if not _ai_available:
+        hb_print("  Skipping expansion (AI unavailable)")
+        return script
     current_wc = len(script.split())
     if current_wc >= target_words:
         return script
@@ -497,29 +513,11 @@ Write the COMPLETE expanded script now. Every section must be significantly long
             else:
                 hb_print(f"  Expansion too short ({new_wc} words), retrying...")
         else:
-            hb_print(f"  Expansion AI failed, retrying...")
+            hb_print(f"  Expansion AI failed, aborting expansion")
+            return script
         time.sleep(1)
-    hb_print("  Full expansion incomplete, trying section-by-section...")
-    sections = parse_sections(script)
-    expanded_sections = []
-    for i, sec in enumerate(sections):
-        heartbeat(f"  Expanding section {i+1}/{len(sections)}: {sec['name']}")
-        sec_wc = len(sec['text'].split())
-        target_sec_wc = max(sec_wc + 200, 400)
-        sec_prompt = f"""Expand this true crime documentary section from {sec_wc} words to at least {target_sec_wc} words.
-Add specific details, witness accounts, timeline details, evidence descriptions, and atmospheric narration.
-Keep the [{sec['name']}] marker. Do NOT remove any existing content, only ADD more detail.
-
-[{sec['name']}] {sec['text']}"""
-        expanded = gen_with_fallback(sec_prompt)
-        if expanded and len(expanded.split()) > sec_wc * 1.2:
-            expanded_sections.append(expanded)
-        else:
-            expanded_sections.append(f"[{sec['name']}] {sec['text']}")
-        time.sleep(1)
-    combined = "\n\n".join(expanded_sections)
-    hb_print(f"  Section expansion: {len(combined.split())} words (~{len(combined.split())/150:.0f} min)")
-    return combined
+    hb_print("  Full expansion incomplete, aborting (AI likely down)")
+    return script
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -527,6 +525,7 @@ Keep the [{sec['name']}] marker. Do NOT remove any existing content, only ADD mo
 # ═══════════════════════════════════════════════════════════════
 
 def gen_script(category):
+    global _ai_available
     best_script = None
     best_wc = 0
     for attempt in range(3):
@@ -571,7 +570,7 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
                     return expand_script(result, TARGET_LONG_WORDS)
                 return result
         time.sleep(1)
-    if best_script and best_wc >= 800:
+    if best_script and best_wc >= 800 and _ai_available:
         hb_print(f"  Best AI: {best_wc} words. Expanding...")
         result = expand_script(best_script, TARGET_LONG_WORDS)
         wc = len(result.split())
@@ -581,17 +580,16 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
     keys = list(OFFLINE_SCRIPTS.keys())
     random.shuffle(keys)
     combined = ""
-    for k in keys:
+    for k in keys[:3]:
         combined += OFFLINE_SCRIPTS[k]["script"] + "\n\n"
     combined = trim_script(combined, MAX_LONG_WORDS)
     wc = len(combined.split())
-    if wc < TARGET_LONG_WORDS:
-        combined = expand_script(combined, TARGET_LONG_WORDS)
-        combined = trim_script(combined, MAX_LONG_WORDS)
+    hb_print(f"  Offline fallback: {wc} words (AI was down)")
     return combined
 
 
 def gen_short(working_title):
+    global _ai_available
     hb_print("  Generating short script...")
     prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
 
@@ -628,10 +626,17 @@ Script: {script[:800]}"""
 
 
 def gen_meta(working_title, lang_code, lang_name, is_short):
+    global _ai_available
     heartbeat(f"  Generating {lang_name} metadata...")
     safe_title = working_title
     if not validate_title(safe_title):
         safe_title = generate_title_from_script(working_title if len(working_title) > 20 else "true crime mystery")
+    if not _ai_available:
+        return {"title": safe_title[:70], "title_b": safe_title[:70],
+                "description": f"True crime documentary: {safe_title}",
+                "tags": sanitize_tags(["true crime", "mystery", "documentary", "crime", "unsolved"]),
+                "pinned_comment": "What do you think really happened? Let us know in the comments.",
+                "category": random.choice(CASE_CATEGORIES)}
     kind = "Short" if is_short else "Long"
     duration = "60-90 seconds" if is_short else "20-25 minutes"
     prompt = f"""Generate YouTube metadata for a true crime video in {lang_name}.
@@ -666,6 +671,10 @@ Write ALL in {lang_name}."""
 
 
 def translate(text, lang_code, lang_name):
+    global _ai_available
+    if not _ai_available:
+        hb_print(f"  Skipping translation to {lang_name} (AI down)")
+        return text
     heartbeat(f"  Translating to {lang_name}...")
     orig_wc = len(text.split())
     if orig_wc > MAX_LONG_WORDS:
@@ -693,6 +702,7 @@ The translation MUST be at least {orig_wc} words long - translate every single s
 
 
 def run_prepare():
+    global _ai_available
     hb_print("=" * 50)
     hb_print("PREPARE START")
     hb_print("=" * 50)
@@ -736,31 +746,36 @@ def run_prepare():
                 sel.append(extra)
 
     hb_print(f"\nLanguages: {[LANGUAGES[c]['name'] for c in sel]}")
+    if not _ai_available:
+        hb_print("\n⚠️  AI is DOWN - using English scripts for all languages (no translations)")
     am = {}
     for code in sel:
         info = LANGUAGES[code]
         hb_print(f"\n=== {info['name']} ({code}) ===")
         am[code] = {}
         if code != "en":
-            hb_print("  Translating long...")
             translated_long = translate(ls, code, info["name"])
             with open(os.path.join(OUT, "scripts", f"long_{code}.txt"), "w", encoding="utf-8") as f:
                 f.write(translated_long)
+        else:
+            translated_long = ls
         hb_print("  Generating long metadata...")
         am[code]["long"] = gen_meta(wt, code, info["name"], False)
         if code != "en":
-            hb_print("  Translating short...")
             translated_short = translate(ss, code, info["name"])
             with open(os.path.join(OUT, "scripts", f"short_{code}.txt"), "w", encoding="utf-8") as f:
                 f.write(translated_short)
+        else:
+            translated_short = ss
         hb_print("  Generating short metadata...")
         am[code]["short"] = gen_meta(wt, code, info["name"], True)
 
     with open(os.path.join(OUT, "metadata", "all.json"), "w", encoding="utf-8") as f:
         json.dump(am, f, indent=2, ensure_ascii=False)
 
+    status = "⚠️  AI DOWN - English fallback used" if not _ai_available else "✅ AI OK"
     hb_print(f"\n{'=' * 50}")
-    hb_print(f"PREPARE DONE - {len(sel)} languages")
+    hb_print(f"PREPARE DONE - {len(sel)} languages - {status}")
     hb_print(f"{'=' * 50}")
 
 
@@ -1436,15 +1451,12 @@ def run_build():
     except:
         try: dark_bg_rich(THUMB_WIDTH, THUMB_HEIGHT).save(tp, quality=THUMB_QUALITY)
         except: pass
+    try: shutil.rmtree(TEMP, ignore_errors=True)
+    except: pass
     r = {"video": vp, "thumbnail": tp, "lang": lc, "kind": kind, "duration": vd}
     with open(os.path.join(OUT, "result.json"), "w") as f: json.dump(r, f)
     hb_print(f"BUILD SUCCESS: {lc} {kind} ({vd/60:.1f} min)")
 
-    # Cleanup temp slides to save disk space
-    try: shutil.rmtree(TEMP, ignore_errors=True)
-    except: pass
-    
-    hb_print(f"BUILD SUCCESS: {lc} {kind} ({vd/60:.1f} min)")
 
 # ═══════════════════════════════════════════════════════════════
 # UPLOAD MODULE
@@ -1648,7 +1660,7 @@ CASE_DETAILS = ["timeline","evidence","witness testimony","motive","alibi","DNA 
 
 
 def generate_ai_reply(comment_text, video_title, lang="en"):
-    if GEMINI_KEY:
+    if _ai_available and GEMINI_KEY:
         try:
             prompt = f"""You host a true crime channel. A viewer commented on "{video_title}": "{comment_text}". Write a natural reply: acknowledge them, add a detail, end with a question. Under 200 chars. Reply:"""
             url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
