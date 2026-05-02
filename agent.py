@@ -28,6 +28,16 @@ import requests as http_req
 from config import *
 
 # ═══════════════════════════════════════════════════════════════
+# KEEPS GITHUB ACTIONS RUNNER ALIVE NO MATTER WHAT
+# ═══════════════════════════════════════════════════════════════
+def _keep_alive():
+    while True:
+        time.sleep(10)
+        print(".", end="", flush=True)
+
+threading.Thread(target=_keep_alive, daemon=True).start()
+
+# ═══════════════════════════════════════════════════════════════
 # OFFLINE SCRIPT TEMPLATES (ZERO AI REQUIRED)
 # ═══════════════════════════════════════════════════════════════
 OFFLINE_SCRIPTS = {
