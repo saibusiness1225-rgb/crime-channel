@@ -253,6 +253,11 @@ def call_gemini(prompt, max_retries=1):
 def call_groq(prompt):
     """Groq is 100% free, incredibly fast, and almost never rate limits."""
     try:
+        # Groq free tier has a strict payload limit (~6000 words). Skip if too big.
+        if len(prompt.split()) > 5000:
+            hb_print("  Groq skipped: Prompt too large for free tier")
+            return None
+            
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
             return None
