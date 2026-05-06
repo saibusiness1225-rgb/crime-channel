@@ -223,9 +223,9 @@ def hb_print(msg):
     print(msg, flush=True)
 
 
-# ═══════════════════════════════════════════════════════════════
-# AI PROVIDERS
-# ═══════════════════════════════════════════════════════════════
+# ═════════════════════════════════════════════════════════════════
+# AI PROVIDERS (100% FREE TIER - NO CREDIT CARD REQUIRED)
+# ═════════════════════════════════════════════════════════════════
 
 def call_gemini(prompt, max_retries=1):
     global _ai_available
@@ -242,12 +242,36 @@ def call_gemini(prompt, max_retries=1):
                     return text
             if r.status_code == 429:
                 hb_print(f"  Gemini rate limited (429)")
-                _ai_available = False
                 return None
             hb_print(f"  Gemini attempt {attempt+1} failed: {r.status_code}")
         except Exception as e:
             hb_print(f"  Gemini error: {str(e)[:60]}")
         time.sleep(2)
+    return None
+
+
+def call_groq(prompt):
+    """Groq is 100% free, incredibly fast, and almost never rate limits."""
+    try:
+        groq_key = os.environ.get("GROQ_API_KEY", "")
+        if not groq_key:
+            return None
+        heartbeat("  Trying Groq (Free AI)...")
+        url = "https://api.groq.com/openai/v1/chat/completions"
+        payload = {
+            "model": "llama-3.1-8b-instant", 
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8,
+            "max_tokens": 16384
+        }
+        r = http_req.post(url, json=payload, timeout=60, headers={"Authorization": f"Bearer {groq_key}"})
+        if r.status_code == 200:
+            text = r.json()["choices"][0]["message"]["content"]
+            if len(text) > 100:
+                return text
+        hb_print(f"  Groq failed: {r.status_code}")
+    except Exception as e:
+        hb_print(f"  Groq error: {str(e)[:80]}")
     return None
 
 
@@ -268,10 +292,13 @@ def gen_with_fallback(prompt):
     global _ai_available
     if not _ai_available:
         return None
+    
     providers = []
     if GEMINI_KEY:
         providers.append(("Gemini", call_gemini))
+    providers.append(("Groq", call_groq)) # Groq is now 2nd priority
     providers.append(("Pollinations", call_pollinations))
+    
     for name, fn in providers:
         hb_print(f"  Trying {name}...")
         result = fn(prompt)
@@ -285,10 +312,93 @@ def gen_with_fallback(prompt):
                 if gibberish_count / len(words) > 0.4:
                     continue
             return result
+            
     _ai_available = False
     hb_print("  All AI providers failed - marking AI as unavailable")
     return None
 
+
+# ═════════════════════════════════════════════════════════════════
+# TRANSLATION ENGINE (Zero-Cost Fallbacks)
+# ═════════════════════════════════════════════════════════════════
+
+def translate(text, lang_code, lang_name):
+    global _ai_available
+    if not _ai_available:
+        hb_print(f"  Skipping translation to {lang_name} (AI down)")
+        return None
+        
+    heartbeat(f"  Translating to {lang_name}...")
+    orig_wc = len(text.split())
+    if orig_wc > MAX_LONG_WORDS:
+        text = trim_script(text, MAX_LONG_WORDS)
+        orig_wc = len(text.split())
+        
+    # Attempt 1: AI Translation (Fast & Context-Aware)
+    prompt = f"""Translate this ENTIRE true crime script to {lang_name}.
+Keep [HOOK][INTRO][BACKGROUND][THE CRIME][INVESTIGATION][SUSPECTS][RESOLUTION][CONCLUSION][PAUSE] markers unchanged.
+Translate naturally and COMPLETELY. DO NOT skip, shorten, or summarize any sections.
+The translation MUST be at least {orig_wc} words long - translate every single sentence.
+
+{text}"""
+    
+    ai_providers = []
+    if GEMINI_KEY:
+        ai_providers.append(("Gemini", call_gemini))
+    
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if groq_key:
+        ai_providers.append(("Groq", call_groq))
+        
+    ai_providers.append(("Pollinations", call_pollinations))
+        
+    for name, fn in ai_providers:
+        hb_print(f"  Trying {name} for translation...")
+        result = fn(prompt)
+        if result and len(result) > 50:
+            result_wc = len(result.split())
+            if result_wc < orig_wc * 0.5:
+                hb_print(f"  {name} translation too short ({result_wc} vs {orig_wc})")
+                continue
+            if result_wc < orig_wc * 0.7:
+                hb_print(f"  WARNING: Translation shorter ({result_wc} vs {orig_wc}), proceeding")
+            else:
+                hb_print(f"  Translation OK via {name}: {result_wc} words (original: {orig_wc})")
+            return result
+
+    # Attempt 2: Google Translate (Offline, Free, No API Key needed)
+    hb_print("  AI translation failed. Trying Google Translate (Free Offline)...")
+    try:
+        from googletrans import Translator
+        translator = Translator()
+        # Split into chunks because Google Translate hates massive single requests
+        chunks = []
+        current_chunk = ""
+        for line in text.split('\n'):
+            current_chunk += line + "\n"
+            if len(current_chunk.split()) > 2000:
+                chunks.append(current_chunk)
+                current_chunk = ""
+        if current_chunk.strip():
+            chunks.append(current_chunk)
+            
+        translated_chunks = []
+        for chunk in chunks:
+            result = translator.translate(chunk, src='en', dest=lang_code)
+            if result and hasattr(result, 'text'):
+                translated_chunks.append(result.text)
+            time.sleep(0.5) # Be polite to free google translate servers
+            
+        if translated_chunks:
+            final_text = "\n".join(translated_chunks)
+            final_wc = len(final_text.split())
+            hb_print(f"  Google Translate OK: {final_wc} words")
+            return final_text
+    except Exception as e:
+        hb_print(f"  Google Translate error: {str(e)[:80]}")
+
+    hb_print(f"  All translation methods failed for {lang_name}")
+    return None
 
 # ═══════════════════════════════════════════════════════════════
 # TITLE & TAG VALIDATION
