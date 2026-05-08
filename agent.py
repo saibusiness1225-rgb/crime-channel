@@ -699,7 +699,10 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
     random.shuffle(keys)
     combined = ""
     for k in keys:
-        combined += OFFLINE_SCRIPTS[k]["script"] + "\n\n"
+        # Scramble the paragraphs of each offline script to make them look different
+        paragraphs = OFFLINE_SCRIPTS[k]["script"].split("\n\n")
+        random.shuffle(paragraphs)
+        combined += "\n\n".join(paragraphs) + "\n\n"
     combined = trim_script(combined, MAX_LONG_WORDS)
     wc = len(combined.split())
     hb_print(f"  Offline fallback: {wc} words (AI was down)")
