@@ -188,7 +188,7 @@ THUMB_QUALITY = 98
 THUMB_STYLE = "cinematic"
 THUMB_FONT_COLOR = (255, 255, 0)
 THUMB_ACCENT_COLOR = (196, 30, 58)
-THUMB_GLOW_EFFECT = True
+THUMB_GLOW_EFFECT = False
 THUMB_EMOTION_WORDS = ["SHOCKING", "UNSEEN", "EXPOSED", "HIDDEN", "DARK", "CHILLING", "TERRIFYING"]
 
 # ═══════════════════════════════════════════════════════════════
