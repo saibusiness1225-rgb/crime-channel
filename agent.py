@@ -679,7 +679,6 @@ Write the COMPLETE expanded script now. Every section must be significantly long
 # ═══════════════════════════════════════════════════════════════
 
 def gen_script(category):
-    used_offline_keys = set() # Track offline templates used in this session
     global _ai_available
     best_script = None
     best_wc = 0
@@ -755,7 +754,6 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
 
 
 def gen_short(working_title):
-    used_short_offline_keys = set()
     hb_print("  Generating short script...")
     prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
 
