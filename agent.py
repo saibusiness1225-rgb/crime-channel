@@ -776,35 +776,6 @@ REQUIREMENTS:
     hb_print(f"  Used short template: {selected_key} ({10 - len(used_short_offline_keys)} remaining)")
     return OFFLINE_SHORTS[selected_key]["script"]
 
-def gen_short(working_title):
-    hb_print("  Generating short script...")
-    prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
-
-REQUIREMENTS:
-- 150-200 words total.
-- Start with a SHOCKING hook in the first 3 seconds.
-- DO NOT use [HOOK] [THE CRIME] [CONCLUSION] section markers. Just write plain paragraphs.
-- End with a question that forces viewers to comment.
-- Keep sentences very short. Punchy. TikTok style.
-- Use only REAL well-known cases."""
-    result = gen_with_fallback(prompt)
-    if result and len(result) > 80:
-        return result
-        hb_print("  AI short failed. Using offline template...")
-    if not used_short_offline_keys:
-        keys = list(OFFLINE_SHORTS.keys())
-    else:
-        keys = [k for k in OFFLINE_SHORTS.keys() if k not in used_short_offline_keys]
-
-    if not keys:
-        hb_print("  ERROR: All offline short templates already used today!")
-        sys.exit(1)
-
-    selected_key = random.choice(keys)
-    used_short_offline_keys.add(selected_key)
-    hb_print(f"  Used short template: {selected_key} ({len(used_short_offline_keys)} remaining)")
-    return OFFLINE_SHORTS[selected_key]["script"]
-
 def extract_title(script):
     for key, data in OFFLINE_SCRIPTS.items():
         if script.strip() == data["script"].strip():
