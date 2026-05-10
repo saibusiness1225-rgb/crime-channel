@@ -1627,14 +1627,13 @@ def run_build():
             dark_bg_rich(VIDEO_W if not iss else SHORT_W, VIDEO_H if not iss else SHORT_H).save(fp, quality=90); ai.append(fp)
     ni = IMAGES_PER_SHORT if iss else min(60, IMAGES_PER_VIDEO)
     imgs = random.sample(ai, min(ni, len(ai)))
-       vp = os.path.join(OUT, f"video_{kind}_{lc}.mp4")
+    vp = os.path.join(OUT, f"video_{kind}_{lc}.mp4")
     if iss:
         try: render_short_video(clean, lc, kind, ap, srt_path, vp)
         except Exception as e: hb_print(f"FAIL: short render: {e}"); sys.exit(1)
     else:
         try: render_video(imgs, ap, srt_path, vp, iss)
         except Exception as e: hb_print(f"FAIL: long render: {e}"); sys.exit(1)
-    except Exception as e: hb_print(f"FAIL: render: {e}"); sys.exit(1)
     if not os.path.exists(vp): sys.exit(1)
     vd = get_dur(vp); md = 10.0 if iss else 900.0
     if vd < md:
