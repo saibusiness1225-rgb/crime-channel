@@ -37,6 +37,12 @@ CRF = 28
 # ═══════════════════════════════════════════════════════════════
 # IMAGE SETTINGS
 # ═══════════════════════════════════════════════════════════════
+SHORTS_PEXELS_QUERIES = [
+    "dark aesthetic rain window", "cyberpunk city rain", "dark foggy forest",
+    "dark moody portrait", "rain on dark street", "dark abandoned hallway",
+    "smoke texture abstract", "ocean waves dark", "dark cave mystery",
+    "noir detective rain", "dark office at night", "empty dark room"
+]
 PEXELS_QUERIES = [
     "dark city night", "police investigation", "crime scene tape",
     "dark alley", "noir street", "mystery fog", "courthouse",
