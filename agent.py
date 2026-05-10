@@ -710,17 +710,16 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
 
 
 def gen_short(working_title):
-    global _ai_available
     hb_print("  Generating short script...")
     prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
 
 REQUIREMENTS:
-- 150-200 words
-- Start with a SHOCKING hook in the first 3 seconds
-- Use [HOOK] [THE CRIME] [CONCLUSION] section markers
-- End with a question that forces viewers to comment
-- Keep sentences short and punchy for TTS
-- Use only REAL well-known cases"""
+- 150-200 words total.
+- Start with a SHOCKING hook in the first 3 seconds.
+- DO NOT use [HOOK] [THE CRIME] [CONCLUSION] section markers. Just write plain paragraphs.
+- End with a question that forces viewers to comment.
+- Keep sentences very short. Punchy. TikTok style.
+- Use only REAL well-known cases."""
     result = gen_with_fallback(prompt)
     if result and len(result) > 80:
         return result
@@ -1459,7 +1458,83 @@ def render_video(imgs, ap, srt_path, op, short=False):
             if os.path.exists(op): os.remove(op)
         except: pass
     raise Exception("Video encoding failed after all attempts.")
+def download_pexels_video(query):
+    try:
+        resp = http_req.get("https://api.pexels.com/videos/search",
+            params={"query": query, "per_page": 1, "orientation": "portrait", "size": "medium"},
+            headers={" {"Authorization": PEXELS_KEY}, timeout=20)
+        if resp.status_code == 200:
+            videos = resp.json().get("videos", [])
+            if videos:
+                video = videos[0]
+                video_files = video.get("video_files", [])
+                mp4_file = next((f for f in video_files if f.get("quality") in ["hd", "sd"]), video_files[0])
+                video_url = mp4_file["link"]
+                hb_print(f"    Downloading Pexels video: {query}")
+                r = get_video_url(video_url) # Use the helper function below
+                if r and os.path.exists(r) and os.path.getsize(r) > 10000:
+                    return r
+    except Exception as e:
+        hb_print(f"    Pexels video error: {str(e)[:80]}")
+    return None
 
+def get_video_url(url):
+    try:
+        r = http_req.get(url, stream=True, timeout=120)
+        if r.status_code == 200:
+            path = os.path.join(TEMP, "bg_video.mp4")
+            with open(path, "wb") as f:
+                for chunk in r.iter_content(chunk_size=8192):
+                    f.write(chunk)
+            return path
+    except Exception as e:
+        hb_print(f"    Video download error: {str(e)[:80]}")
+    return None
+
+def render_short_video(script, lc, kind, ap, srt_path, op):
+    hb_print(f"    Generating 60s viral short...")
+    bg_video = download_pexels_video("dark aesthetic rain")
+    if not bg_video:
+        hb_print("    No Pexels video found, generating dark background")
+        bg_video = os.path.join(TEMP, "fallback_bg.mp4")
+        dark_bg_rich(SHORT_W, SHORT_H).save(os.path.join(TEMP, "fallback_bg.jpg"), quality=90)
+        cmd = ["ffmpeg","-y","-loop","-t","60","-i",os.path.join(TEMP, "fallback_bg.jpg"),
+               "-vf","scale=1080:1920:force_original_aspect_ratio=decrease,fps=1,format=yuv420p",
+               "-c:v","libx264","-preset","ultrafast","-crf","28","-pix_fmt","yuv420p","-an",bg_video]
+        subprocess.run(cmd, capture_output=True, timeout=30)
+        
+    adur = get_dur(ap)
+    video_dur = min(adur + 2, 60)
+    has_subs = srt_path and os.path.exists(srt_path) and os.path.getsize(srt_path) > 50
+    
+    force_style = "FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BackColour=&H80000000,Outline=2,MarginV=30"
+    
+    if has_subs:
+        srt_temp = os.path.join(EXT_TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
+        srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
+        fc = f"[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,fps=30,format=yuv420p[sub=2:a]overlay[sub='{srt_escaped}':force_style='{force_style}']"
+        inputs = ["-y","-i",bg_video,"-i",ap]
+        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[sub]","-map","[a]",
+                "-c:v","libx264","-preset","ultrafast","-crf","28","-c:a","aac","-b:a","128k",
+                "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+    else:
+        fc = f"[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,fps=30,format=yuv420p[a]"
+        inputs = ["-y","-i",bg_video,"-i",ap]
+        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[a]","-c:v","libx264","-preset","ultrafast","crf","28","-c:a","aac","-b:a","128k",
+                "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+        
+    r = _ffmpeg_run(cmd, "render-short", 120)
+    if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
+        hb_print("    Short render OK!")
+        return
+    if os.path.exists(op): os.remove(op)
+    hb_print("    Short render failed, falling back to slide method...")
+    render_video([], ap, srt_path, op, short=True) # Fallback to old method
+
+
+def clean_text(t):
+    c = re.sub(r'\[(HOOK|INTRO|BACKGROUND|THE CRIME|INVESTIGATION|SOSPECTS|RESOLUTION|CONCLUSION|SCENE CHANGE|PAUSE)\]', '.', t)
+    return re.sub(r'(\.\s*){3,}', '. ', re.sub(r'\s+', ' ', c).strip()).strip('. ')
 
 def make_thumb(title, imgs, op, short=False):
     from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
@@ -1552,8 +1627,13 @@ def run_build():
             dark_bg_rich(VIDEO_W if not iss else SHORT_W, VIDEO_H if not iss else SHORT_H).save(fp, quality=90); ai.append(fp)
     ni = IMAGES_PER_SHORT if iss else min(60, IMAGES_PER_VIDEO)
     imgs = random.sample(ai, min(ni, len(ai)))
-    vp = os.path.join(OUT, f"video_{kind}_{lc}.mp4")
-    try: render_video(imgs, ap, srt_path, vp, iss)
+       vp = os.path.join(OUT, f"video_{kind}_{lc}.mp4")
+    if iss:
+        try: render_short_video(clean, lc, kind, ap, srt_path, vp)
+        except Exception as e: hb_print(f"FAIL: short render: {e}"); sys.exit(1)
+    else:
+        try: render_video(imgs, ap, srt_path, vp, iss)
+        except Exception as e: hb_print(f"FAIL: long render: {e}"); sys.exit(1)
     except Exception as e: hb_print(f"FAIL: render: {e}"); sys.exit(1)
     if not os.path.exists(vp): sys.exit(1)
     vd = get_dur(vp); md = 10.0 if iss else 900.0
