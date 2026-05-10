@@ -694,7 +694,8 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
         wc = len(result.split())
         if wc >= MIN_LONG_WORDS:
             return trim_script(result, MAX_LONG_WORDS)
-    hb_print("  Using offline templates (AI unavailable/too short)...")
+    hb_print("  AI failed. Refusing to create duplicate content. Aborting prepare step.")
+    sys.exit(1)
     keys = list(OFFLINE_SCRIPTS.keys())
     random.shuffle(keys)
     combined = ""
@@ -723,7 +724,8 @@ REQUIREMENTS:
     result = gen_with_fallback(prompt)
     if result and len(result) > 80:
         return result
-    hb_print("  AI short failed. Using offline template...")
+    hb_print("  AI short failed. Refusing to create duplicate content. Aborting prepare step.")
+    sys.exit(1)
     return OFFLINE_SHORTS[random.choice(list(OFFLINE_SHORTS.keys()))]["script"]
 
 
