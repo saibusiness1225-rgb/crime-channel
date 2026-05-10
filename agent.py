@@ -1540,6 +1540,17 @@ def make_thumb(title, imgs, op, short=False):
     from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
     w = THUMB_WIDTH if not short else SHORT_W; h = THUMB_HEIGHT if not short else SHORT_H
     bg = dark_bg_rich(w, h)
+      # Load a random stock photo instead of dark background
+    try:
+        from PIL import Image
+        stock_imgs = sorted([os.path.join(IMGS,f) for f in os.listdir(IMGS) if f.lower().endswith(('.jpg','.jpeg','.png'))])
+        if stock_imgs:
+            b = safe_load_image(random.choice(stock_imgs), w, h)
+            b = b.filter(ImageFilter.GaussianBlur(3)).enhance_brightness(0.4)
+            b = ImageEnhance.Contrast(b).enhance(1.2)
+            ov = Image.new("RGBA",(w,h),(0,0,0,100))
+            bg = Image.alpha_composite(b.convert("RGBA"), ov).convert("RGB")
+    except: pass
     if imgs:
         try:
             b = safe_load_image(random.choice(imgs), w, h)
