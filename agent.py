@@ -251,15 +251,13 @@ def call_gemini(prompt, max_retries=1):
 
 
 def call_groq(prompt):
-    """Groq is 100% free and fast, but limited to small prompts. Used only for Shorts/Metadata."""
+    """Groq free tier has a strict payload limit. We don't use it for full scripts."""
     try:
-        # Hard block: Groq free tier cannot handle long scripts. Skip entirely if prompt is too big.
-        if len(prompt) > 10000: # Character limit safety net
-            hb_print("  Groq skipped: Prompt too large")
-            return None
-            
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
+            return None
+        # Only use Groq for small prompts (titles, metadata, short scripts)
+        if len(prompt.split()) > 1000:
             return None
         heartbeat("  Trying Groq (Free AI)...")
         url = "https://api.groq.com/openai/v1/chat/completions"
@@ -282,6 +280,45 @@ def call_groq(prompt):
         hb_print(f"  Groq error: {str(e)[:80]}")
     return None
 
+
+def chunked_groq_translate(text, lang_name):
+    """Translate in chunks to bypass Groq payload limits."""
+    try:
+        sentences = [s.strip() for s in text.split('\n') if s.strip()]
+        chunk_size = 200
+        chunks = ['\n'.join(sentences[i:i+chunk_size]) for i in range(0, len(sentences), chunk_size)]
+        
+        translated_chunks = []
+        for i, chunk in enumerate(chunks):
+            chunk_prompt = f"Translate the following text to {lang_name}. Do NOT add commentary, just return the translated text:\n\n{chunk}"
+            
+            groq_key = os.environ.get("GROQ_API_KEY", "")
+            if not groq_key:
+                return None
+                
+            url = "https://api.groq.com/openai/v1/chat/completions"
+            payload = {
+                "model": "llama-3.1-8b-instant", 
+                "messages": [{"role": "user", "content": chunk_prompt}],
+                "temperature": 0.3,
+                "max_tokens": 4096
+            }
+            r = http_req.post(url, json=payload, timeout=60, headers={"Authorization": f"Bearer {groq_key}"})
+            if r.status_code == 200:
+                text = r.json()["choices"][0]["message"]["content"]
+                if len(text) > 10:
+                    translated_chunks.append(text)
+                    hb_print(f"    Groq chunk {i+1}/{len(chunks)} OK")
+            else:
+                hb_print(f"    Groq chunk {i+1}/{len(chunks)} failed: {r.status_code}")
+        if len(translated_chunks) > len(chunks) * 0.5:
+            hb_print("    Too many chunks failed, aborting Groq translation")
+            return None
+            
+        return "\n\n".join(translated_chunks)
+    except Exception as e:
+        hb_print(f"    Groq error: {str(e)[:80]}")
+    return None
 
 def call_pollinations(prompt):
     try:
@@ -350,13 +387,14 @@ The translation MUST be at least {orig_wc} words long - translate every single s
 
 {text}"""
     
+        # Attempt 1: AI Translation (Chunked to bypass Groq limits)
     ai_providers = []
     if GEMINI_KEY:
         ai_providers.append(("Gemini", call_gemini))
     
     groq_key = os.environ.get("GROQ_API_KEY", "")
     if groq_key:
-        ai_providers.append(("Groq", call_groq))
+        ai_providers.append(("Groq", "chunked_groq_translate"))
         
     ai_providers.append(("Pollinations", call_pollinations))
         
@@ -374,12 +412,11 @@ The translation MUST be at least {orig_wc} words long - translate every single s
                 hb_print(f"  Translation OK via {name}: {result_wc} words (original: {orig_wc})")
             return result
 
-    # Attempt 2: Google Translate (Offline, Free, No API Key needed)
+    # Attempt 2: Google Translate (Offline, Free, No API key needed)
     hb_print("  AI translation failed. Trying Google Translate (Free Offline)...")
     try:
         from googletrans import Translator
         translator = Translator()
-        # Split into chunks because Google Translate hates massive single requests
         chunks = []
         current_chunk = ""
         for line in text.split('\n'):
@@ -395,7 +432,7 @@ The translation MUST be at least {orig_wc} words long - translate every single s
             result = translator.translate(chunk, src='en', dest=lang_code)
             if result and hasattr(result, 'text'):
                 translated_chunks.append(result.text)
-            time.sleep(0.5) # Be polite to free google translate servers
+            time.sleep(0.5)
             
         if translated_chunks:
             final_text = "\n".join(translated_chunks)
@@ -407,7 +444,6 @@ The translation MUST be at least {orig_wc} words long - translate every single s
 
     hb_print(f"  All translation methods failed for {lang_name}")
     return None
-
 # ═══════════════════════════════════════════════════════════════
 # TITLE & TAG VALIDATION
 # ═══════════════════════════════════════════════════════════════
