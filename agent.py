@@ -679,7 +679,7 @@ Write the COMPLETE expanded script now. Every section must be significantly long
 # ═══════════════════════════════════════════════════════════════
 
 def gen_script(category):
-    global _ai_available
+    used_offline_keys = set()
     best_script = None
     best_wc = 0
     for attempt in range(3):
@@ -701,11 +701,12 @@ STRUCTURE - Use EXACTLY these section markers:
 
 RETENTION TECHNIQUES:
 - Every 3 minutes, add a hook: "But the worst was yet to come..."
-- Foreshadow upcoming reveals
-- Add cliffhangers before section breaks
-- Include emotional moments
+- Foreshadow upcoming reveals: "Little did they know, the answer had been sitting in evidence for decades..."
+- Add cliffhangers before section breaks: "Then a witness came forward with a story that would break the case wide open..."
+- Include emotional moments: family reactions, community fear, victim impact
 
 End with [PAUSE] and a thought-provoking question.
+
 DO NOT use fictional names. Use only REAL well-known cases.
 DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
         result = gen_with_fallback(prompt)
@@ -723,9 +724,9 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
                 if wc < TARGET_LONG_WORDS:
                     return expand_script(result, TARGET_LONG_WORDS)
                 return result
-        time.sleep(1)
+        time.sleep(2)
     if best_script and best_wc >= 800 and _ai_available:
-        hb_print(f"  Best AI: {best_wc} words. Expanding...")
+        hb_print(f"  Best AI result: {best_wc} words. Expanding...")
         result = expand_script(best_script, TARGET_LONG_WORDS)
         wc = len(result.split())
         if wc >= MIN_LONG_WORDS:
@@ -736,22 +737,44 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
         random.shuffle(keys)
     else:
         keys = [k for k in OFFLINE_SCRIPTS.keys() if k not in used_offline_keys]
-    
     if not keys:
-        hb_print("  ERROR: All offline templates already used today!")
+        hb_print("  ALL OFFLINE TEMPLATES ALREADY USED!")
         sys.exit(1)
-    
     selected_key = random.choice(keys)
     combined = OFFLINE_SCRIPTS[selected_key]["script"] + "\n\n"
-    used_offline_keys.add(selected_key)
-    hb_print(f"  Used offline template: {selected_key} ({len(used_offline_keys)} remaining)")
-        random.shuffle(paragraphs)
-        combined += "\n\n".join(paragraphs) + "\n\n"
     combined = trim_script(combined, MAX_LONG_WORDS)
     wc = len(combined.split())
-    hb_print(f"  Offline fallback: {wc} words (AI was down)")
+    hb_print(f"  Used offline template: {selected_key} ({10 - len(used_offline_keys)} remaining)")
     return combined
 
+
+def gen_short(working_title):
+    used_short_offline_keys = set()
+    hb_print("  Generating short script...")
+    prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
+
+REQUIREMENTS:
+- 150-200 words total.
+- Start with a SHOCKING hook in the first 3 seconds.
+- DO NOT use [HOOK] [THE CRIME] [CONCLUSION] section markers. Just write plain paragraphs.
+- End with a question that forces viewers to comment.
+- Keep sentences very short. Punchy. TikTok style.
+- Use only REAL well-known cases."""
+    result = gen_with_fallback(prompt)
+    if result and len(result) > 80:
+        return result
+    hb_print("  AI short failed. Using offline template...")
+    if not used_short_offline_keys:
+        keys = list(OFFLINE_SHORTS.keys())
+    else:
+        keys = [k for k in OFFLINE_SHORTS.keys() if k not in used_short_offline_keys]
+    if not keys:
+        hb_print("  ERROR: All offline short templates already used today!")
+        sys.exit(1)
+    selected_key = random.choice(keys)
+    used_short_offline_keys.add(selected_key)
+    hb_print(f"  Used short template: {selected_key} ({10 - len(used_short_offline_keys)} remaining)")
+    return OFFLINE_SHORTS[selected_key]["script"]
 
 def gen_short(working_title):
     hb_print("  Generating short script...")
