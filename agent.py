@@ -1462,7 +1462,7 @@ def download_pexels_video(query):
     try:
         resp = http_req.get("https://api.pexels.com/videos/search",
             params={"query": query, "per_page": 1, "orientation": "portrait", "size": "medium"},
-            headers={" {"Authorization": PEXELS_KEY}, timeout=20)
+            headers={"Authorization": PEXELS_KEY}, timeout=20)
         if resp.status_code == 200:
             videos = resp.json().get("videos", [])
             if videos:
