@@ -679,6 +679,7 @@ Write the COMPLETE expanded script now. Every section must be significantly long
 # ═══════════════════════════════════════════════════════════════
 
 def gen_script(category):
+    used_offline_keys = set() # Track offline templates used in this session
     global _ai_available
     best_script = None
     best_wc = 0
@@ -730,13 +731,21 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
         wc = len(result.split())
         if wc >= MIN_LONG_WORDS:
             return trim_script(result, MAX_LONG_WORDS)
-    hb_print("  Using offline templates (AI unavailable/too short)...")
-    keys = list(OFFLINE_SCRIPTS.keys())
-    random.shuffle(keys)
-    combined = ""
-    for k in keys:
-        # Scramble the paragraphs of each offline script to make them look different
-        paragraphs = OFFLINE_SCRIPTS[k]["script"].split("\n\n")
+    hb_print("  Using offline template (AI unavailable/too short)...")
+    if not used_offline_keys:
+        keys = list(OFFLINE_SCRIPTS.keys())
+        random.shuffle(keys)
+    else:
+        keys = [k for k in OFFLINE_SCRIPTS.keys() if k not in used_offline_keys]
+    
+    if not keys:
+        hb_print("  ERROR: All offline templates already used today!")
+        sys.exit(1)
+    
+    selected_key = random.choice(keys)
+    combined = OFFLINE_SCRIPTS[selected_key]["script"] + "\n\n"
+    used_offline_keys.add(selected_key)
+    hb_print(f"  Used offline template: {selected_key} ({len(used_offline_keys)} remaining)")
         random.shuffle(paragraphs)
         combined += "\n\n".join(paragraphs) + "\n\n"
     combined = trim_script(combined, MAX_LONG_WORDS)
@@ -746,6 +755,7 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
 
 
 def gen_short(working_title):
+    used_short_offline_keys = set()
     hb_print("  Generating short script...")
     prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
 
@@ -759,9 +769,20 @@ REQUIREMENTS:
     result = gen_with_fallback(prompt)
     if result and len(result) > 80:
         return result
-    hb_print("  AI short failed. Using offline template...")
-    return OFFLINE_SHORTS[random.choice(list(OFFLINE_SHORTS.keys()))]["script"]
+        hb_print("  AI short failed. Using offline template...")
+    if not used_short_offline_keys:
+        keys = list(OFFLINE_SHORTS.keys())
+    else:
+        keys = [k for k in OFFLINE_SHORTS.keys() if k not in used_short_offline_keys]
 
+    if not keys:
+        hb_print("  ERROR: All offline short templates already used today!")
+        sys.exit(1)
+
+    selected_key = random.choice(keys)
+    used_short_offline_keys.add(selected_key)
+    hb_print(f"  Used short template: {selected_key} ({len(used_short_offline_keys)} remaining)")
+    return OFFLINE_SHORTS[selected_key]["script"]
 
 def extract_title(script):
     for key, data in OFFLINE_SCRIPTS.items():
