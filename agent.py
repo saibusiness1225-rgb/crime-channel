@@ -425,8 +425,7 @@ def gen_with_fallback(prompt):
                     continue
             return result
             
-    _ai_available = False
-    hb_print("  All AI providers failed - marking AI as unavailable")
+    hb_print("  All AI providers failed for this prompt.")
     return None
 
 
@@ -676,12 +675,7 @@ Write the COMPLETE expanded script now. Every section must be significantly long
             hb_print(f"  Expansion AI failed")
         time.sleep(1)
         
-    # FIX: If we couldn't even reach 50% of target, AI is effectively unusable
-    if best_wc < target_words * 0.5:
-        hb_print("  Full expansion incomplete, aborting (AI likely down)")
-        _ai_available = False  # force fallback path in run_build
-    else:
-        hb_print(f"  Partial expansion reached {best_wc} words (proceeding with best available)")
+    hb_print(f"  Expansion incomplete. Proceeding with best available ({best_wc} words)")
     return best_script
 
 
@@ -736,12 +730,17 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
                     return expand_script(result, TARGET_LONG_WORDS)
                 return result
         time.sleep(2)
-    if best_script and best_wc >= 800 and _ai_available:
-        hb_print(f"  Best AI result: {best_wc} words. Expanding...")
-        result = expand_script(best_script, TARGET_LONG_WORDS)
-        wc = len(result.split())
-        if wc >= MIN_LONG_WORDS:
-            return trim_script(result, MAX_LONG_WORDS)
+        
+    # FIX: If we got a decent script (>800 words) but couldn't reach the target, just use it!
+    if best_script and best_wc >= 800:
+        hb_print(f"  Using best AI result ({best_wc} words). Expanding if possible...")
+        if _ai_available:
+            result = expand_script(best_script, TARGET_LONG_WORDS)
+            wc = len(result.split())
+            if wc >= 800:
+                return trim_script(result, MAX_LONG_WORDS)
+        return trim_script(best_script, MAX_LONG_WORDS)
+        
     hb_print("  Using offline template (AI unavailable/too short)...")
     if not used_offline_keys:
         keys = list(OFFLINE_SCRIPTS.keys())
@@ -1646,14 +1645,14 @@ def run_build():
             
         # FIX: If AI failed entirely and we are still too short, combine multiple offline templates
         # (Single templates are only ~500 words / 4 minutes, which fails the 15 min audio check)
-        if wc < MIN_LONG_WORDS and not _ai_available:
-            hb_print(f"  ⚠️ Script under {MIN_LONG_WORDS} words (AI down). Combining offline templates to reach minimum length...")
+        if wc < 1000 and not _ai_available:
+            hb_print(f"  ⚠️ Script under 1000 words (AI down). Combining offline templates to reach minimum length...")
             keys = list(OFFLINE_SCRIPTS.keys())
             random.shuffle(keys)
             combined = ""
             for k in keys:
                 combined += OFFLINE_SCRIPTS[k]["script"] + "\n\n"
-                if len(combined.split()) >= MIN_LONG_WORDS:
+                if len(combined.split()) >= 1000:
                     break
             raw = trim_script(combined, MAX_LONG_WORDS)
             with open(sp, "w", encoding="utf-8") as f: f.write(raw)
