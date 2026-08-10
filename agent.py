@@ -273,12 +273,12 @@ def call_gemini(prompt, max_retries=3):
 
 def call_openrouter(prompt):
     """Free models on OpenRouter"""
-    try:
-        or_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if not or_key:
-            return None
+    or_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not or_key:
+        return None
             
-        heartbeat("  Trying OpenRouter (Free Llama 3)...")
+    heartbeat("  Trying OpenRouter (Free Llama 3)...")
+    try:
         url = "https://openrouter.ai/api/v1/chat/completions"
         payload = {
             "model": "meta-llama/llama-3-8b-instruct:free",  # Free tier model
@@ -305,16 +305,16 @@ def call_openrouter(prompt):
 
 def call_groq(prompt):
     """Groq free tier has a strict payload limit. We don't use it for full scripts."""
+    groq_key = os.environ.get("GROQ_API_KEY", "")
+    if not groq_key:
+        return None
+        
+    # STRICT LIMIT: Only use Groq for prompts under 400 words
+    if len(prompt.split()) > 400:
+        return None
+        
+    heartbeat("  Trying Groq (Free AI)...")
     try:
-        groq_key = os.environ.get("GROQ_API_KEY", "")
-        if not groq_key:
-            return None
-            
-        # STRICT LIMIT: Only use Groq for prompts under 400 words
-        if len(prompt.split()) > 400:
-            return None
-            
-        heartbeat("  Trying Groq (Free AI)...")
         url = "https://api.groq.com/openai/v1/chat/completions"
         payload = {
             "model": "llama-3.1-8b-instant", 
@@ -396,10 +396,19 @@ def gen_with_fallback(prompt):
     providers = []
     if GEMINI_KEYS:
         providers.append(("Gemini", call_gemini))
+    else:
+        hb_print("  Gemini skipped: GEMINI_API_KEY not set")
+        
     if os.environ.get("OPENROUTER_API_KEY"):
         providers.append(("OpenRouter", call_openrouter))
+    else:
+        hb_print("  OpenRouter skipped: OPENROUTER_API_KEY not set")
+        
     if len(prompt.split()) < 400 and os.environ.get("GROQ_API_KEY"):
         providers.append(("Groq", call_groq))
+    else:
+        hb_print("  Groq skipped: GROQ_API_KEY not set or prompt too long")
+        
     providers.append(("Pollinations", call_pollinations))
     
     for name, fn in providers:
@@ -1287,38 +1296,14 @@ def slide_sub(op, w, h, fonts):
 
 def gen_atmospheric_music(dur, op):
     d = int(dur)+10
+    # Simplified, highly reliable music generation
     try:
-        fc = ("[0]volume=0.20[a];[1]volume=0.08[b1];[2]volume=0.06[b2];[3]volume=0.07[b3];"
-              "[b1][b2]amix=inputs=2:duration=longest[b12];[b12][b3]amix=inputs=2:duration=longest[b];"
-              "[4]volume=0.03[c];[5]volume=0.05[dd];"
-              "[a][b]amix=inputs=2:duration=longest[ab];[ab][c]amix=inputs=2:duration=longest[abc];"
-              "[abc][dd]amix=inputs=2:duration=longest[mix];"
-              "[mix]lowpass=f=800,highpass=f=30,volume=0.15[out]")
         cmd = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=55:duration={d}",
-               "-f","lavfi","-i",f"sine=frequency=130.81:duration={d}",
-               "-f","lavfi","-i",f"sine=frequency=155.56:duration={d}",
-               "-f","lavfi","-i",f"sine=frequency=196:duration={d}",
-               "-f","lavfi","-i",f"sine=frequency=880:duration={d}",
-               "-f","lavfi","-i",f"sine=frequency=35:duration={d}",
-               "-filter_complex",fc,"-map","[out]","-c:a","aac","-b:a","96k",op]
-        r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+               "-f","lavfi","-i",f"sine=frequency=82.41:duration={d}",
+               "-filter_complex","[0]volume=0.15[a];[1]volume=0.08[b];[a][b]amix=inputs=2:duration=longest,lowpass=f=400,volume=0.12[out]",
+               "-map","[out]","-c:a","aac","-b:a","64k",op]
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 1000:
-            return True
-    except: pass
-    try:
-        fc2 = "[0]volume=0.20[a];[1]volume=0.10[b];[a][b]amix=inputs=2:duration=longest,lowpass=f=400,volume=0.12[out]"
-        cmd2 = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=55:duration={d}",
-                "-f","lavfi","-i",f"sine=frequency=82.41:duration={d}",
-                "-filter_complex",fc2,"-map","[out]","-c:a","aac","-b:a","64k",op]
-        r2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
-        if r2.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 1000:
-            return True
-    except: pass
-    try:
-        cmd3 = ["ffmpeg","-y","-f","lavfi","-i",f"sine=frequency=65:duration={d}",
-                "-af","lowpass=f=300,volume=0.08","-c:a","aac","-b:a","48k",op]
-        r3 = subprocess.run(cmd3, capture_output=True, text=True, timeout=30)
-        if r3.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 500:
             return True
     except: pass
     hb_print("    WARNING: Music generation failed")
@@ -1420,16 +1405,16 @@ def render_video(imgs, ap, srt_path, op, short=False):
     has_subs = srt_path and os.path.exists(srt_path) and os.path.getsize(srt_path) > 50
     hb_print(f"    Encoding: preset={use_preset}, crf={use_crf}, timeout={encode_timeout}s")
 
+    # FIX: Use libx264 -tune stillimage for massive speedup on slideshows
     if has_subs and hm:
         try:
             srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
             srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
-            fc = (f"[0:v]fps={use_fps},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
-                  f"[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]")
-            inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp]
-            cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                    "-c:v",CODEC,"-preset",use_preset,"-crf",str(use_crf),"-c:a","aac","-b:a","128k",
-                    "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+            vf = f"fps={use_fps},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p"
+            cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp,
+                   "-vf",vf,"-map","0:v:0","-map","1:a:0","-map","2:a:0",
+                   "-c:v",CODEC,"-preset",use_preset,"-tune","stillimage","-crf",str(use_crf),
+                   "-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op]
             r = _ffmpeg_run(cmd, "render+subs+music", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
                 hb_print("    Render: subs+music OK"); return
@@ -1444,12 +1429,11 @@ def render_video(imgs, ap, srt_path, op, short=False):
         try:
             srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
             srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
-            fc = (f"[0:v]fps={use_fps},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p[v];"
-                  f"[1:a]acopy[a]")
-            inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
-            cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                    "-c:v",CODEC,"-preset",use_preset,"-crf",str(use_crf),"-c:a","aac","-b:a","128k",
-                    "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+            vf = f"fps={use_fps},subtitles='{srt_escaped}':force_style='{force_style}',format=yuv420p"
+            cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",cl,"-i",ap,
+                   "-vf",vf,"-map","0:v:0","-map","1:a:0",
+                   "-c:v",CODEC,"-preset",use_preset,"-tune","stillimage","-crf",str(use_crf),
+                   "-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op]
             r = _ffmpeg_run(cmd, "render+subs", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
                 hb_print("    Render: subs OK"); return
@@ -1462,11 +1446,11 @@ def render_video(imgs, ap, srt_path, op, short=False):
 
     if hm:
         try:
-            fc = f"[0:v]fps={use_fps},format=yuv420p[v];[1:a]volume=1.0[a1];[2:a]volume=0.3[a2];[a1][a2]amix=inputs=2:duration=first[a]"
-            inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp]
-            cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                    "-c:v",CODEC,"-preset",use_preset,"-crf",str(use_crf),"-c:a","aac","-b:a","128k",
-                    "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+            vf = f"fps={use_fps},format=yuv420p"
+            cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",cl,"-i",ap,"-i",mp,
+                   "-vf",vf,"-map","0:v:0","-map","1:a:0","-map","2:a:0",
+                   "-c:v",CODEC,"-preset",use_preset,"-tune","stillimage","-crf",str(use_crf),
+                   "-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op]
             r = _ffmpeg_run(cmd, "render+music", encode_timeout)
             if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
                 hb_print("    Render: music OK"); return
@@ -1478,11 +1462,11 @@ def render_video(imgs, ap, srt_path, op, short=False):
             except: pass
 
     try:
-        fc = f"[0:v]fps={use_fps},format=yuv420p[v];[1:a]acopy[a]"
-        inputs = ["-f","concat","-safe","0","-i",cl,"-i",ap]
-        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","[a]",
-                "-c:v",CODEC,"-preset","ultrafast","-crf","28","-c:a","aac","-b:a","128k",
-                "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
+        vf = f"fps={use_fps},format=yuv420p"
+        cmd = ["ffmpeg","-y","-f","concat","-safe","0","-i",cl,"-i",ap,
+               "-vf",vf,"-map","0:v:0","-map","1:a:0",
+               "-c:v",CODEC,"-preset","ultrafast","-tune","stillimage","-crf","28",
+               "-c:a","aac","-b:a","128k","-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op]
         r = _ffmpeg_run(cmd, "render-simple", encode_timeout)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
             hb_print("    Render: simple OK"); return
@@ -1495,16 +1479,16 @@ def render_video(imgs, ap, srt_path, op, short=False):
 
     try:
         base_video = os.path.join(TEMP, "base_video.mp4")
-        cmd_slides = (["ffmpeg","-y","-f","concat","-safe","0","-i",cl,
-                        "-vf",f"fps={use_fps},format=yuv420p",
-                        "-c:v",CODEC,"-preset","ultrafast","-crf","28",
-                        "-pix_fmt","yuv420p","-an",base_video])
+        vf = f"fps={use_fps},format=yuv420p"
+        cmd_slides = ["ffmpeg","-y","-f","concat","-safe","0","-i",cl,
+                      "-vf",vf,"-c:v",CODEC,"-preset","ultrafast","-tune","stillimage","-crf","28",
+                      "-pix_fmt","yuv420p","-an",base_video]
         r = _ffmpeg_run(cmd_slides, "render-slides", encode_timeout)
         if r.returncode != 0 or not os.path.exists(base_video) or os.path.getsize(base_video) < 5000:
             raise Exception("Slide video failed")
-        cmd_mux = (["ffmpeg","-y","-i",base_video,"-i",ap,
-                     "-c:v","copy","-c:a","aac","-b:a","128k",
-                     "-shortest","-movflags","+faststart",op])
+        cmd_mux = ["ffmpeg","-y","-i",base_video,"-i",ap,
+                   "-c:v","copy","-c:a","aac","-b:a","128k",
+                   "-shortest","-movflags","+faststart",op]
         r = _ffmpeg_run(cmd_mux, "render-mux", 300)
         if r.returncode == 0 and os.path.exists(op) and os.path.getsize(op) > 10000:
             hb_print("    Render: mux OK"); return
