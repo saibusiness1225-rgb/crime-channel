@@ -2,6 +2,7 @@
 """
 Crime Channel Agent - ALL-IN-ONE YouTube Automation
 ====================================================
+
 Usage:
   python agent.py prepare          # Generate scripts + metadata
   python agent.py download         # Download images from Pexels
@@ -14,13 +15,15 @@ Usage:
   python agent.py full             # Run full pipeline (prepare+download+build+upload)
 
 Environment Variables:
-  GEMINI_API_KEY     - Google Gemini API key
+  GEMINI_API_KEY     - Google Gemini API keys (comma-separated for rotation)
+  OPENROUTER_API_KEY - OpenRouter API key (Free Llama 3 fallback)
+  GROQ_API_KEY       - Groq API key (Fast metadata/shorts)
   PEXELS_API_KEY     - Pexels API key
   YT_CLIENT_ID       - YouTube OAuth2 client ID
   YT_CLIENT_SECRET   - YouTube OAuth2 client secret
   YT_REFRESH_TOKEN   - YouTube OAuth2 refresh token
-  LANG_CODE           - Language code (en, es, hi, fr, pt, de, ja, ar)
-  VIDEO_TYPE          - "long" or "short"
+  LANG_CODE          - Language code (en, es, hi, fr, pt, de, ja, ar)
+  VIDEO_TYPE         - "long" or "short"
 """
 
 import os, json, random, time, datetime, re, subprocess, asyncio, shutil, math, sys, threading
@@ -41,6 +44,10 @@ threading.Thread(target=_keep_alive, daemon=True).start()
 # GLOBAL AI STATE - prevents spamming dead APIs
 # ═══════════════════════════════════════════════════════════════
 _ai_available = True  # Set to False once we detect AI is completely down
+
+# Parse multiple Gemini keys for rotation
+GEMINI_KEYS = [k.strip() for k in os.environ.get("GEMINI_API_KEY", "").split(",") if k.strip()]
+_gemini_key_index = 0
 
 # ═══════════════════════════════════════════════════════════════
 # OFFLINE SCRIPT TEMPLATES (ZERO AI REQUIRED)
@@ -227,26 +234,72 @@ def hb_print(msg):
 # AI PROVIDERS (100% FREE TIER - NO CREDIT CARD REQUIRED)
 # ═════════════════════════════════════════════════════════════════
 
-def call_gemini(prompt, max_retries=1):
-    global _ai_available
+def call_gemini(prompt, max_retries=3):
+    global _ai_available, _gemini_key_index
+    if not GEMINI_KEYS:
+        return None
+
     for attempt in range(max_retries):
         heartbeat(f"  Gemini attempt {attempt+1}...")
         try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+            # Pick a key using round-robin
+            current_key = GEMINI_KEYS[_gemini_key_index % len(GEMINI_KEYS)]
+            _gemini_key_index += 1
+
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={current_key}"
             payload = {"contents": [{"parts": [{"text": prompt}]}],
                        "generationConfig": {"temperature": 0.9, "maxOutputTokens": 16384, "topP": 0.95}}
-            r = http_req.post(url, json=payload, timeout=45)
+            
+            # Increase timeout for long scripts
+            r = http_req.post(url, json=payload, timeout=90)
+            
             if r.status_code == 200:
                 text = r.json()["candidates"][0]["content"]["parts"][0]["text"]
                 if len(text) > 200:
                     return text
+            
             if r.status_code == 429:
-                hb_print(f"  Gemini rate limited (429)")
-                return None
-            hb_print(f"  Gemini attempt {attempt+1} failed: {r.status_code}")
+                hb_print(f"  Gemini rate limited (429). Rotating key...")
+                time.sleep(2)  # Brief pause before trying the next key
+                continue
+            
+            hb_print(f"  Gemini failed: {r.status_code}")
         except Exception as e:
             hb_print(f"  Gemini error: {str(e)[:60]}")
         time.sleep(2)
+    
+    return None
+
+
+def call_openrouter(prompt):
+    """Free models on OpenRouter"""
+    try:
+        or_key = os.environ.get("OPENROUTER_API_KEY", "")
+        if not or_key:
+            return None
+            
+        heartbeat("  Trying OpenRouter (Free Llama 3)...")
+        url = "https://openrouter.ai/api/v1/chat/completions"
+        payload = {
+            "model": "meta-llama/llama-3-8b-instruct:free",  # Free tier model
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.8,
+            "max_tokens": 8000
+        }
+        headers = {
+            "Authorization": f"Bearer {or_key}",
+            "HTTP-Referer": "https://github.com/",  # Required by OpenRouter
+            "X-Title": "Crime Channel Agent"  # Required by OpenRouter
+        }
+        r = http_req.post(url, json=payload, timeout=90, headers=headers)
+        if r.status_code == 200:
+            text = r.json()["choices"][0]["message"]["content"]
+            if len(text) > 100:
+                return text
+        else:
+            hb_print(f"  OpenRouter failed: {r.status_code}")
+    except Exception as e:
+        hb_print(f"  OpenRouter error: {str(e)[:80]}")
     return None
 
 
@@ -256,24 +309,26 @@ def call_groq(prompt):
         groq_key = os.environ.get("GROQ_API_KEY", "")
         if not groq_key:
             return None
-        # Only use Groq for small prompts (titles, metadata, short scripts)
-        if len(prompt.split()) > 1000:
+            
+        # STRICT LIMIT: Only use Groq for prompts under 400 words
+        if len(prompt.split()) > 400:
             return None
+            
         heartbeat("  Trying Groq (Free AI)...")
         url = "https://api.groq.com/openai/v1/chat/completions"
         payload = {
             "model": "llama-3.1-8b-instant", 
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.8,
-            "max_tokens": 16384
+            "max_tokens": 4000
         }
         r = http_req.post(url, json=payload, timeout=60, headers={"Authorization": f"Bearer {groq_key}"})
         if r.status_code == 200:
             text = r.json()["choices"][0]["message"]["content"]
-            if len(text) > 100:
+            if len(text) > 50:
                 return text
         if r.status_code == 413:
-            hb_print("  Groq skipped: Payload limit reached")
+            hb_print("  Groq skipped: Payload too large")
         else:
             hb_print(f"  Groq failed: {r.status_code}")
     except Exception as e:
@@ -339,9 +394,12 @@ def gen_with_fallback(prompt):
         return None
     
     providers = []
-    if GEMINI_KEY:
+    if GEMINI_KEYS:
         providers.append(("Gemini", call_gemini))
-    providers.append(("Groq", call_groq)) # Groq is now 2nd priority
+    if os.environ.get("OPENROUTER_API_KEY"):
+        providers.append(("OpenRouter", call_openrouter))
+    if len(prompt.split()) < 400 and os.environ.get("GROQ_API_KEY"):
+        providers.append(("Groq", call_groq))
     providers.append(("Pollinations", call_pollinations))
     
     for name, fn in providers:
@@ -364,87 +422,6 @@ def gen_with_fallback(prompt):
 
 
 # ═════════════════════════════════════════════════════════════════
-# TRANSLATION ENGINE (Zero-Cost Fallbacks)
-# ═════════════════════════════════════════════════════════════════
-
-def translate(text, lang_code, lang_name):
-    global _ai_available
-    if not _ai_available:
-        hb_print(f"  Skipping translation to {lang_name} (AI down)")
-        return None
-        
-    heartbeat(f"  Translating to {lang_name}...")
-    orig_wc = len(text.split())
-    if orig_wc > MAX_LONG_WORDS:
-        text = trim_script(text, MAX_LONG_WORDS)
-        orig_wc = len(text.split())
-        
-    # Attempt 1: AI Translation (Fast & Context-Aware)
-    prompt = f"""Translate this ENTIRE true crime script to {lang_name}.
-Keep [HOOK][INTRO][BACKGROUND][THE CRIME][INVESTIGATION][SUSPECTS][RESOLUTION][CONCLUSION][PAUSE] markers unchanged.
-Translate naturally and COMPLETELY. DO NOT skip, shorten, or summarize any sections.
-The translation MUST be at least {orig_wc} words long - translate every single sentence.
-
-{text}"""
-    
-        # Attempt 1: AI Translation (Chunked to bypass Groq limits)
-    ai_providers = []
-    if GEMINI_KEY:
-        ai_providers.append(("Gemini", call_gemini))
-    
-    groq_key = os.environ.get("GROQ_API_KEY", "")
-    if groq_key:
-        ai_providers.append(("Groq", "chunked_groq_translate"))
-        
-    ai_providers.append(("Pollinations", call_pollinations))
-        
-    for name, fn in ai_providers:
-        hb_print(f"  Trying {name} for translation...")
-        result = fn(prompt)
-        if result and len(result) > 50:
-            result_wc = len(result.split())
-            if result_wc < orig_wc * 0.5:
-                hb_print(f"  {name} translation too short ({result_wc} vs {orig_wc})")
-                continue
-            if result_wc < orig_wc * 0.7:
-                hb_print(f"  WARNING: Translation shorter ({result_wc} vs {orig_wc}), proceeding")
-            else:
-                hb_print(f"  Translation OK via {name}: {result_wc} words (original: {orig_wc})")
-            return result
-
-    # Attempt 2: Google Translate (Offline, Free, No API key needed)
-    hb_print("  AI translation failed. Trying Google Translate (Free Offline)...")
-    try:
-        from googletrans import Translator
-        translator = Translator()
-        chunks = []
-        current_chunk = ""
-        for line in text.split('\n'):
-            current_chunk += line + "\n"
-            if len(current_chunk.split()) > 2000:
-                chunks.append(current_chunk)
-                current_chunk = ""
-        if current_chunk.strip():
-            chunks.append(current_chunk)
-            
-        translated_chunks = []
-        for chunk in chunks:
-            result = translator.translate(chunk, src='en', dest=lang_code)
-            if result and hasattr(result, 'text'):
-                translated_chunks.append(result.text)
-            time.sleep(0.5)
-            
-        if translated_chunks:
-            final_text = "\n".join(translated_chunks)
-            final_wc = len(final_text.split())
-            hb_print(f"  Google Translate OK: {final_wc} words")
-            return final_text
-    except Exception as e:
-        hb_print(f"  Google Translate error: {str(e)[:80]}")
-
-    hb_print(f"  All translation methods failed for {lang_name}")
-    return None
-# ═══════════════════════════════════════════════════════════════
 # TITLE & TAG VALIDATION
 # ═══════════════════════════════════════════════════════════════
 
@@ -599,25 +576,39 @@ def trim_short_script(script, max_words=MAX_SHORT_WORDS):
     if wc <= max_words:
         return script
     hb_print(f"  Trimming short {wc} -> {max_words} words...")
-    lines = script.split('\n')
-    result = []
-    in_crime = False
-    crime_words = 0
-    for line in lines:
-        if '[HOOK]' in line or '[CONCLUSION]' in line or '[PAUSE]' in line:
-            in_crime = False
-            result.append(line)
-        elif '[THE CRIME]' in line:
-            in_crime = True
-            result.append(line)
-        elif in_crime:
-            crime_words += len(line.split())
-            if crime_words <= max_words - 80:
-                result.append(line)
-        else:
-            result.append(line)
-    trimmed = '\n'.join(result)
-    hb_print(f"  Short trimmed to {len(trimmed.split())} words")
+    
+    # Split into sentences so we don't cut mid-sentence
+    sentences = re.split(r'(?<=[.!?])\s+', script.strip())
+    kept, kept_wc = [], 0
+
+    # Always keep first sentence as the hook
+    if sentences:
+        kept.append(sentences[0])
+        kept_wc += len(sentences[0].split())
+
+    # Walk the middle sentences, stop when near budget
+    for s in sentences[1:-1]:
+        if kept_wc + len(s.split()) > max_words - 40:  # reserve 40 for conclusion
+            break
+        kept.append(s)
+        kept_wc += len(s.split())
+
+    # Always keep last sentence as the conclusion (the engagement question)
+    if len(sentences) > 1:
+        last = sentences[-1]
+        if last not in kept:
+            kept.append(last)
+            kept_wc += len(last.split())
+
+    trimmed = ' '.join(kept)
+    final_wc = len(trimmed.split())
+    hb_print(f"  Short trimmed to {final_wc} words")
+
+    # Hard cap if still over (rare)
+    if final_wc > max_words:
+        words = trimmed.split()[:max_words]
+        trimmed = ' '.join(words) + '...'
+        hb_print(f"  Hard-capped to {max_words} words")
     return trimmed
 
 
@@ -629,6 +620,10 @@ def expand_script(script, target_words=TARGET_LONG_WORDS):
     current_wc = len(script.split())
     if current_wc >= target_words:
         return script
+        
+    best_script = script
+    best_wc = current_wc
+    
     for expand_attempt in range(2):
         shortfall = target_words - current_wc
         per_section = max(200, shortfall // 8)
@@ -658,8 +653,10 @@ Write the COMPLETE expanded script now. Every section must be significantly long
         if result:
             new_wc = len(result.split())
             has_markers = any(f'[{m}]' in result for m in ['HOOK','INTRO','BACKGROUND','THE CRIME','INVESTIGATION','SUSPECTS','RESOLUTION','CONCLUSION'])
-            if new_wc >= current_wc * 1.3 and has_markers:
+            if new_wc >= current_wc * 1.3 and has_markers and new_wc > best_wc:
                 hb_print(f"  Expanded to {new_wc} words (~{new_wc/150:.0f} min)")
+                best_script = result
+                best_wc = new_wc
                 script = result
                 current_wc = new_wc
                 if current_wc >= target_words:
@@ -667,11 +664,16 @@ Write the COMPLETE expanded script now. Every section must be significantly long
             else:
                 hb_print(f"  Expansion too short ({new_wc} words), retrying...")
         else:
-            hb_print(f"  Expansion AI failed, aborting expansion")
-            return script
+            hb_print(f"  Expansion AI failed")
         time.sleep(1)
-    hb_print("  Full expansion incomplete, aborting (AI likely down)")
-    return script
+        
+    # FIX: If we couldn't even reach 50% of target, AI is effectively unusable
+    if best_wc < target_words * 0.5:
+        hb_print("  Full expansion incomplete, aborting (AI likely down)")
+        _ai_available = False  # force fallback path in run_build
+    else:
+        hb_print(f"  Partial expansion reached {best_wc} words (proceeding with best available)")
+    return best_script
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -751,17 +753,22 @@ DO NOT stop early. Write EVERY SINGLE WORD of the COMPLETE script."""
 def gen_short(working_title):
     used_short_offline_keys = set()
     hb_print("  Generating short script...")
-    prompt = f"""Write a SHORT true crime script (60-90 seconds) based on: {working_title}
+    prompt = f"""Write a SHORT true crime script based on: {working_title}
 
-REQUIREMENTS:
-- 150-200 words total.
-- Start with a SHOCKING hook in the first 3 seconds.
-- DO NOT use [HOOK] [THE CRIME] [CONCLUSION] section markers. Just write plain paragraphs.
-- End with a question that forces viewers to comment.
-- Keep sentences very short. Punchy. TikTok style.
-- Use only REAL well-known cases."""
+ABSOLUTE RULES:
+- EXACTLY 150 to 180 words. Count them. If you exceed 180, you have failed.
+- 3 to 4 short paragraphs only.
+- Start with a 10-15 word shocking hook.
+- End with one short engagement question.
+- No section markers. Plain text only.
+- Short punchy sentences. TikTok pacing.
+- Real well-known cases only.
+
+Write it now:"""
     result = gen_with_fallback(prompt)
-    if result and len(result) > 80:
+    if result and len(result.split()) > 80:
+        if len(result.split()) > MAX_SHORT_WORDS:
+            result = trim_short_script(result, MAX_SHORT_WORDS)
         return result
     hb_print("  AI short failed. Using offline template...")
     if not used_short_offline_keys:
@@ -1061,9 +1068,9 @@ SEC_TITLES = {"HOOK":"","INTRO":"THE STORY BEGINS","BACKGROUND":"THE BACKGROUND"
     "SUSPECTS":"THE SUSPECTS","RESOLUTION":"THE RESOLUTION","CONCLUSION":"THE AFTERMATH"}
 
 
-async def try_voice(text, voice, ap, sp):
+async def try_voice(text, voice, ap, sp, rate="+0%"):
     import edge_tts
-    comm = edge_tts.Communicate(text, voice)
+    comm = edge_tts.Communicate(text, voice, rate=rate)
     submaker = edge_tts.SubMaker()
     got = False
     with open(ap, "wb") as af:
@@ -1088,10 +1095,11 @@ async def try_voice(text, voice, ap, sp):
 async def gen_tts(text, lc, kind, ap, sp):
     kk = "short" if kind == "short" else "long"
     vs = VOICES.get(lc, VOICES["en"]).get(kk, VOICES["en"][kk])
+    rate = "+20%" if kk == "short" else "+0%"  # FIX: Speed up shorts by 20% to prevent >60s audio
     for v in vs:
-        hb_print(f"    Voice: {v}")
+        hb_print(f"    Voice: {v} (Rate: {rate})")
         try:
-            if await try_voice(text, v, ap, sp):
+            if await try_voice(text, v, ap, sp, rate):
                 hb_print(f"    OK: {v}"); return True
         except:
             if os.path.exists(ap): os.remove(ap)
@@ -1507,6 +1515,7 @@ def render_video(imgs, ap, srt_path, op, short=False):
             if os.path.exists(op): os.remove(op)
         except: pass
     raise Exception("Video encoding failed after all attempts.")
+
 def download_pexels_video(query):
     try:
         resp = http_req.get("https://api.pexels.com/videos/search",
@@ -1520,7 +1529,7 @@ def download_pexels_video(query):
                 mp4_file = next((f for f in video_files if f.get("quality") in ["hd", "sd"]), video_files[0])
                 video_url = mp4_file["link"]
                 hb_print(f"    Downloading Pexels video: {query}")
-                r = get_video_url(video_url) # Use the helper function below
+                r = get_video_url(video_url)
                 if r and os.path.exists(r) and os.path.getsize(r) > 10000:
                     return r
     except Exception as e:
@@ -1541,6 +1550,7 @@ def get_video_url(url):
     return None
 
 def render_short_video(script, lc, kind, ap, srt_path, op):
+    os.makedirs(TEMP, exist_ok=True)  # FIX: Ensure temp directory exists before saving background files
     hb_print(f"    Generating 60s viral short...")
     bg_video = download_pexels_video("dark aesthetic rain")
     if not bg_video:
@@ -1559,17 +1569,18 @@ def render_short_video(script, lc, kind, ap, srt_path, op):
     force_style = "FontSize=22,PrimaryColour=&H00FFFFFF,OutlineColour=&H80000000,BackColour=&H80000000,Outline=2,MarginV=30"
     
     if has_subs:
-        srt_temp = os.path.join(EXT_TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
+        srt_temp = os.path.join(TEMP, "subs.srt"); shutil.copy2(srt_path, srt_temp)
         srt_escaped = srt_temp.replace("\\", "/").replace("'", "'\\'").replace(":", "\\:")
-        fc = f"[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,fps=30,format=yuv420p[sub=2:a]overlay[sub='{srt_escaped}':force_style='{force_style}']"
-        inputs = ["-y","-i",bg_video,"-i",ap]
-        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[sub]","-map","[a]",
+        fc = f"[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2,fps=30,format=yuv420p[v];[v]subtitles='{srt_escaped}':force_style='{force_style}'[vsub]"
+        inputs = ["-i",bg_video,"-i",ap]
+        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[vsub]","-map","1:a",
                 "-c:v","libx264","-preset","ultrafast","-crf","28","-c:a","aac","-b:a","128k",
                 "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
     else:
-        fc = f"[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,fps=30,format=yuv420p[a]"
-        inputs = ["-y","-i",bg_video,"-i",ap]
-        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[a]","-c:v","libx264","-preset","ultrafast","crf","28","-c:a","aac","-b:a","128k",
+        fc = f"[0:v]scale=1080:1920:force_original_aspect_ratio=decrease,pad=ceil(iw/2)*2:ceil(ih/2)*2,fps=30,format=yuv420p[v]"
+        inputs = ["-i",bg_video,"-i",ap]
+        cmd = (["ffmpeg","-y"]+inputs+["-filter_complex",fc,"-map","[v]","-map","1:a",
+                "-c:v","libx264","-preset","ultrafast","-crf","28","-c:a","aac","-b:a","128k",
                 "-shortest","-movflags","+faststart","-pix_fmt","yuv420p",op])
         
     r = _ffmpeg_run(cmd, "render-short", 120)
@@ -1578,24 +1589,19 @@ def render_short_video(script, lc, kind, ap, srt_path, op):
         return
     if os.path.exists(op): os.remove(op)
     hb_print("    Short render failed, falling back to slide method...")
-    render_video([], ap, srt_path, op, short=True) # Fallback to old method
+    render_video([], ap, srt_path, op, short=True)
 
-
-def clean_text(t):
-    c = re.sub(r'\[(HOOK|INTRO|BACKGROUND|THE CRIME|INVESTIGATION|SOSPECTS|RESOLUTION|CONCLUSION|SCENE CHANGE|PAUSE)\]', '.', t)
-    return re.sub(r'(\.\s*){3,}', '. ', re.sub(r'\s+', ' ', c).strip()).strip('. ')
 
 def make_thumb(title, imgs, op, short=False):
     from PIL import Image, ImageDraw, ImageFilter, ImageEnhance
     w = THUMB_WIDTH if not short else SHORT_W; h = THUMB_HEIGHT if not short else SHORT_H
     bg = dark_bg_rich(w, h)
-      # Load a random stock photo instead of dark background
     try:
-        from PIL import Image
         stock_imgs = sorted([os.path.join(IMGS,f) for f in os.listdir(IMGS) if f.lower().endswith(('.jpg','.jpeg','.png'))])
         if stock_imgs:
             b = safe_load_image(random.choice(stock_imgs), w, h)
-            b = b.filter(ImageFilter.GaussianBlur(3)).enhance_brightness(0.4)
+            b = b.filter(ImageFilter.GaussianBlur(3))
+            b = ImageEnhance.Brightness(b).enhance(0.4)
             b = ImageEnhance.Contrast(b).enhance(1.2)
             ov = Image.new("RGBA",(w,h),(0,0,0,100))
             bg = Image.alpha_composite(b.convert("RGBA"), ov).convert("RGB")
@@ -1653,12 +1659,34 @@ def run_build():
             expanded = trim_script(expanded, MAX_LONG_WORDS)
             with open(sp, "w", encoding="utf-8") as f: f.write(expanded)
             raw = expanded; wc = len(raw.split())
+            
+        # FIX: If AI failed entirely and we are still too short, combine multiple offline templates
+        # (Single templates are only ~500 words / 4 minutes, which fails the 15 min audio check)
+        if wc < MIN_LONG_WORDS and not _ai_available:
+            hb_print(f"  ⚠️ Script under {MIN_LONG_WORDS} words (AI down). Combining offline templates to reach minimum length...")
+            keys = list(OFFLINE_SCRIPTS.keys())
+            random.shuffle(keys)
+            combined = ""
+            for k in keys:
+                combined += OFFLINE_SCRIPTS[k]["script"] + "\n\n"
+                if len(combined.split()) >= MIN_LONG_WORDS:
+                    break
+            raw = trim_script(combined, MAX_LONG_WORDS)
+            with open(sp, "w", encoding="utf-8") as f: f.write(raw)
+            wc = len(raw.split())
+            hb_print(f"  Using combined offline templates ({wc} words)")
+            
     else:
         wc = len(raw.split())
         if wc > MAX_SHORT_WORDS:
             raw = trim_short_script(raw, MAX_SHORT_WORDS)
+            # FIX: Verify trim actually worked, hard-truncate if not
+            if len(raw.split()) > MAX_SHORT_WORDS + 20:
+                hb_print(f"  ⚠️ Trim failed, hard-truncating to {MAX_SHORT_WORDS} words")
+                raw = ' '.join(raw.split()[:MAX_SHORT_WORDS]) + '...'
             with open(sp, "w", encoding="utf-8") as f: f.write(raw)
             wc = len(raw.split())
+            
     clean = clean_text(raw); wc = len(clean.split())
     if not iss and wc < MIN_LONG_WORDS and _ai_available:
         hb_print(f"SKIP: script too short ({wc} words)"); sys.exit(1)
@@ -1922,10 +1950,10 @@ CASE_DETAILS = ["timeline","evidence","witness testimony","motive","alibi","DNA 
 
 
 def generate_ai_reply(comment_text, video_title, lang="en"):
-    if _ai_available and GEMINI_KEY:
+    if _ai_available and GEMINI_KEYS:
         try:
             prompt = f"""You host a true crime channel. A viewer commented on "{video_title}": "{comment_text}". Write a natural reply: acknowledge them, add a detail, end with a question. Under 200 chars. Reply:"""
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEY}"
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_KEYS[0]}"
             r = http_req.post(url, json={"contents": [{"parts": [{"text": prompt}]}],
                 "generationConfig": {"temperature": 0.8, "maxOutputTokens": 150}}, timeout=30)
             if r.status_code == 200:
