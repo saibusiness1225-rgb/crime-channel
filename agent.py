@@ -281,7 +281,7 @@ def call_openrouter(prompt):
     try:
         url = "https://openrouter.ai/api/v1/chat/completions"
         payload = {
-            "model": "meta-llama/llama-3-8b-instruct:free",  # Free tier model
+            "model": "meta-llama/llama-3-8b-instruct",  # Updated model ID
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.8,
             "max_tokens": 8000
@@ -297,7 +297,7 @@ def call_openrouter(prompt):
             if len(text) > 100:
                 return text
         else:
-            hb_print(f"  OpenRouter failed: {r.status_code}")
+            hb_print(f"  OpenRouter failed: {r.status_code} - {r.text[:150]}")
     except Exception as e:
         hb_print(f"  OpenRouter error: {str(e)[:80]}")
     return None
@@ -507,8 +507,6 @@ def sanitize_tags(tags):
     for t in clean:
         if total + len(t) + 1 > 490:
             break
-        result.append(t)
-        total += len(t) + 1
     if len(result) < 3:
         for d in ["true crime", "mystery", "documentary", "crime", "unsolved"]:
             if d.lower() not in [r.lower() for r in result]:
