@@ -331,6 +331,7 @@ def call_groq(prompt):
             hb_print("  Groq skipped: Payload too large")
         else:
             hb_print(f"  Groq failed: {r.status_code}")
+            time.sleep(5)  # Brief delay to avoid hammering rate limits
     except Exception as e:
         hb_print(f"  Groq error: {str(e)[:80]}")
     return None
@@ -816,6 +817,7 @@ def gen_meta(working_title, lang_code, lang_name, is_short):
     if not validate_title(safe_title):
         safe_title = generate_title_from_script(working_title if len(working_title) > 20 else "true crime mystery")
     if not _ai_available:
+        hb_print("  AI unavailable. Using default metadata.")
         return {"title": safe_title[:70], "title_b": safe_title[:70],
                 "description": f"True crime documentary: {safe_title}",
                 "tags": sanitize_tags(["true crime", "mystery", "documentary", "crime", "unsolved"]),
@@ -847,6 +849,7 @@ Write ALL in {lang_name}."""
             meta["title"] = safe_title[:70]
         return meta
     except:
+        hb_print("  Metadata generation failed. Using default metadata.")
         return {"title": safe_title[:70], "title_b": safe_title[:70],
                 "description": f"True crime documentary: {safe_title}",
                 "tags": sanitize_tags(["true crime", "mystery", "documentary", "crime", "unsolved"]),
@@ -970,7 +973,7 @@ def run_prepare():
 def download_pexels_images(count):
     from PIL import Image
     images = []
-    queries = random.sample(PEXELS_QUERIES, min(count, len(PEXELS_QUERIES)))
+    queries = random.sample(PEXELS_QUERIES, min(count, len(PEXELS_QUERIES))
     per_query = max(1, count // len(queries))
     for q in queries:
         heartbeat(f"  Pexels query: {q}")
