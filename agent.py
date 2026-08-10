@@ -973,7 +973,7 @@ def run_prepare():
 def download_pexels_images(count):
     from PIL import Image
     images = []
-    queries = random.sample(PEXELS_QUERIES, min(count, len(PEXELS_QUERIES))
+    queries = random.sample(PEXELS_QUERIES, min(count, len(PEXELS_QUERIES)))
     per_query = max(1, count // len(queries))
     for q in queries:
         heartbeat(f"  Pexels query: {q}")
